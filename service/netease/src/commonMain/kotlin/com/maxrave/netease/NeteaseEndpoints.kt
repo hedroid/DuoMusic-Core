@@ -1768,6 +1768,10 @@ suspend fun NeteaseClient.artistMvs(
 suspend fun NeteaseClient.mvDetail(mvid: Long): Result<NeteaseMvDetail> =
     runCatching {
         val body = callApi("/mv/detail", linkedMapOf("id" to mvid))
+        com.maxrave.logger.Logger.w(
+            "NeteaseMv",
+            "mv/detail $mvid: topSubed=${(body["subed"] as? JsonPrimitive)?.content} code=${body["code"].nInt()}",
+        )
         val data = body.obj("data") ?: error("mv/detail missing data")
         NeteaseMvDetail(
             id = data["id"].nLong() ?: mvid,
@@ -1836,16 +1840,18 @@ suspend fun NeteaseClient.mvSublist(
         mvs to (body["hasMore"].nInt() == 1)
     }
 
-/** /api/mv/sub:收藏/取消收藏 MV(weapi,需登录;t=1 收藏 t=0 取消;成功 code=200) */
+/** 收藏/取消收藏 MV(weapi 双端点)。与歌单收藏同坑:同一端点带 t=1/t=0 会被服务端
+ *  回 400(t 参数畸形,playlist/subscribe 的 405 同源教训),换 /mv/sub + /mv/unsub 即通。 */
 suspend fun NeteaseClient.mvSub(
     mvid: Long,
     subscribe: Boolean,
 ): Result<Boolean> =
     runCatching {
+        // 参数名驼峰 mvId(探针实证:mvid 小写 400,mvId 200;2026-10-07)
         val body =
             callWeApi(
                 "/mv/sub",
-                linkedMapOf("mvid" to mvid, "t" to if (subscribe) 1 else 0),
+                linkedMapOf("mvId" to mvid, "t" to if (subscribe) 1 else 0),
             )
         body["code"].nInt() == 200
     }

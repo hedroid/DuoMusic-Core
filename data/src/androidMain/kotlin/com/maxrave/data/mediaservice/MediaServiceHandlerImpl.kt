@@ -818,7 +818,11 @@ internal class MediaServiceHandlerImpl(
                         // still has the rest of the track state to publish.
                         coroutineScope.launch { lastfmScrobbler.onTrackStarted(songEntity) }
                     } else {
-                        _controlState.update { it.copy(isLiked = false) }
+                        // 网易 MV 无 DB 行走这里,但 isLiked 由 mvDetail.subed 专管——
+                        // 重置 false 会覆盖收藏对账结果(transition 重发时翻回空心,实测)
+                        if (!videoId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                            _controlState.update { it.copy(isLiked = false) }
+                        }
                         var thumbUrl =
                             track?.thumbnails?.lastOrNull()?.url
                                 ?: "http://i.ytimg.com/vi/${track?.videoId}/maxresdefault.jpg"
@@ -1083,11 +1087,18 @@ internal class MediaServiceHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
+                // 网易 MV 无 DB 行,liked 由 mvDetail.subed 驱动(现值保留),查库只会拿回
+                // 恒 false 覆盖收藏对账结果(updateNotification 播放态变化高频重入,实测
+                // 2ms 内把 like(true) 翻回)
                 val liked =
-                    songRepository
-                        .getSongById(id)
-                        .singleOrNull()
-                        ?.liked ?: false
+                    if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                        _controlState.value.isLiked
+                    } else {
+                        songRepository
+                            .getSongById(id)
+                            .singleOrNull()
+                            ?.liked ?: false
+                    }
                 Logger.w("Check liked", liked.toString())
                 _controlState.value = _controlState.value.copy(isLiked = liked)
                 onUpdateNotification.invoke(
@@ -1337,16 +1348,18 @@ internal class MediaServiceHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
-                // 网易 MV:红心=收藏 MV(mv/sub),无本地镜像行;未登录服务端拒绝→无状态变化
+                // 网易 MV:红心=收藏 MV(mv/sub);写后重拉 subed 对账(取消方向 t=0 服务端
+                // 可能假成功,以回读为准,不做本地乐观翻转)
                 if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
                     val mvid = id.removePrefix(NETEASE_MV_MEDIA_ID_PREFIX).toLongOrNull() ?: return@launch
                     val likedNow = _controlState.value.isLiked == true
-                    val ok =
-                        neteaseRepository
-                            .subscribeMv(mvid, !likedNow)
-                            .getOrDefault(false)
-                    if (ok) {
-                        _controlState.value = _controlState.value.copy(isLiked = !likedNow)
+                    neteaseRepository
+                        .subscribeMv(mvid, !likedNow)
+                        .getOrNull()
+                    // 写库异步,立即回读会撞上主从延迟拿旧态(实测 88ms 内 subed 仍旧值)
+                    delay(800)
+                    neteaseRepository.getMvDetail(mvid).getOrNull()?.subed?.let { subed ->
+                        _controlState.value = _controlState.value.copy(isLiked = subed)
                     }
                     return@launch
                 }

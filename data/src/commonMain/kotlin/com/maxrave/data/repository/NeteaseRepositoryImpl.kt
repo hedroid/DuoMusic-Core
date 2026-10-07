@@ -1341,10 +1341,14 @@ class NeteaseRepositoryImpl(
         /** 评论线程 id;null=歌曲默认。播客节目传 A_DJ_1_<programId> */
         threadId: String? = null,
     ): NeteaseCommentListPage? {
-        val id = songId.toLongOrNull() ?: run {
-            com.maxrave.logger.Logger.w("NeteaseComments", "page: songId not numeric: '$songId'")
-            return null
-        }
+        // MV 队列 id(NETEASE_MV_ 哨兵)非数字:threadId 已显式给(R_MV_5_),数字仅占位
+        val id =
+            songId.toLongOrNull()
+                ?: if (songId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) && !threadId.isNullOrEmpty()) 0L else null
+                ?: run {
+                    com.maxrave.logger.Logger.w("NeteaseComments", "page: songId not numeric: '$songId'")
+                    return null
+                }
         val page =
             client.songCommentsV2(id, sortType = sortType, cursor = cursor, pageNo = pageNo, pageSize = pageSize, threadId = threadId).getOrNull() ?: run {
                 com.maxrave.logger.Logger.w("NeteaseComments", "page fetch failed")
