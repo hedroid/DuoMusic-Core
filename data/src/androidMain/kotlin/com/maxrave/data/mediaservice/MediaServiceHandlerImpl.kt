@@ -2303,6 +2303,11 @@ internal class MediaServiceHandlerImpl(
                     queueState = QueueData.StateSource.STATE_INITIALIZED,
                 )
             }
+            // 装载完成即落盘(recent+全队列原子一致):周期位置保存(mayBeSaveRecentPosition)
+            // 只更新 recentMediaId 不写 saved queue——装载完成后若从未触发暂停/切歌保存
+            // (直接被系统杀),重启恢复=新当前曲前插旧会话残队,即"重启后队列少歌"
+            // (2026-10-07 实测:点歌单最后一首装载完强杀,恢复=[当前曲, 旧单曲] 仅 2 首)。
+            mayBeSaveRecentSong()
             reorderShuffledQueue(player.getCurrentMediaTimeLine())
             // 随机开着(恢复哨兵或上轮未关):新队列装载完成后物理洗牌。
             // 追加型 loadMore 不走 load(),已洗牌队列的追加歌保持队尾,不触发重洗。
