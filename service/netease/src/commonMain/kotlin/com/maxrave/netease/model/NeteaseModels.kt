@@ -98,6 +98,45 @@ data class NeteaseSong(
     val discNumber: String? = null,
     /** 歌曲发布时间毫秒(v3 song detail 的 publishTime)——文件下载 tag 年份用 */
     val publishTimeMs: Long? = null,
+    /** 关联 MV 的 id(song detail 的 mv 字段,0/null=无 MV)——"看 MV"入口用 */
+    val mvId: Long? = null,
+)
+
+/** MV 摘要(歌手 MV 列表 / 最新 MV / 个性化 MV 项):列表端点字段名不一,解析层归一 */
+data class NeteaseMv(
+    val id: Long,
+    val name: String,
+    /** 16:9 横版封面(与歌曲方形封面形状不同——播放层靠它判视频) */
+    val coverUrl: String?,
+    val durationMs: Long,
+    val playCount: Long?,
+    /** 列表端点给日期字符串("2016-07-28"),不做毫秒解析 */
+    val publishTimeStr: String? = null,
+    val artistId: Long? = null,
+    val artistName: String? = null,
+)
+
+/** MV 详情(/api/mv/detail):brs 分辨率直链 + 互动计数 + 评论线程 id。匿名可取,登录带 subed */
+data class NeteaseMvDetail(
+    val id: Long,
+    val name: String,
+    val coverUrl: String?,
+    val durationMs: Long,
+    val playCount: Long?,
+    val likeCount: Long?,
+    val subCount: Long?,
+    val shareCount: Long?,
+    val commentCount: Long?,
+    val publishTimeStr: String?,
+    val description: String?,
+    val briefDesc: String?,
+    /** 评论线程(R_MV_5_<mvid>),播放页评论弹窗直接透传 */
+    val commentThreadId: String?,
+    /** 当前登录用户是否已收藏该 MV(响应顶层 subed,匿名恒 false) */
+    val subed: Boolean?,
+    /** 分辨率 → mp4 直链(带 wsSecret 签名,有时效;240/480/720/1080 按可用子集) */
+    val brs: Map<Int, String>,
+    val artists: List<Pair<Long, String>>,
 )
 
 /** 歌单摘要 DTO(供 repository 映射成 PlaylistEntity) */

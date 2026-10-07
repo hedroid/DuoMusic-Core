@@ -21,6 +21,7 @@ import com.maxrave.common.LOCAL_PLAYLIST_ID
 import com.maxrave.common.LOCAL_PLAYLIST_ID_SAVED_QUEUE
 import com.maxrave.common.MERGING_DATA_TYPE
 import com.maxrave.common.NETEASE_FM_PLAYLIST_ID
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_RADIO_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_RADIO_APPEND_BATCH
@@ -827,13 +828,18 @@ internal class MediaServiceHandlerImpl(
                             (track?.toSongEntity() ?: mediaItem.toSongEntity()).copy(
                                 thumbnails = thumbUrl,
                             )
-                        songRepository
-                            .insertSong(
-                                songEntity,
-                            ).singleOrNull()
-                            ?.let {
-                                Logger.w(TAG, "getDataOfNowPlayingState: $it")
-                            }
+                        // 网易 MV 不是歌:合成行只留在内存驱动 UI 字段,不落 song 表
+                        //(假 YT source 行)、不 scrobble Last.fm(污染听歌记录);RPC 展示 MV 名无害保留
+                        val isNeteaseMv = track?.videoId?.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) == true
+                        if (!isNeteaseMv) {
+                            songRepository
+                                .insertSong(
+                                    songEntity,
+                                ).singleOrNull()
+                                ?.let {
+                                    Logger.w(TAG, "getDataOfNowPlayingState: $it")
+                                }
+                        }
                         Logger.w(TAG, "getDataOfNowPlayingState: $songEntity")
                         _nowPlayingState.update {
                             it.copy(
@@ -843,7 +849,9 @@ internal class MediaServiceHandlerImpl(
                         updateDiscordRpc(songEntity)
                         // Launched separately: "now playing" is a network round trip, and this job
                         // still has the rest of the track state to publish.
-                        coroutineScope.launch { lastfmScrobbler.onTrackStarted(songEntity) }
+                        if (!isNeteaseMv) {
+                            coroutineScope.launch { lastfmScrobbler.onTrackStarted(songEntity) }
+                        }
                     }
                     Logger.w(TAG, "getDataOfNowPlayingState: ${nowPlayingState.value}")
                 }
@@ -874,8 +882,11 @@ internal class MediaServiceHandlerImpl(
                             }
                         }
                     }
-                // SponsorBlock 只索引 YT videoId,网易数字 ID 查询恒空,别白发请求
-                if (dataStoreManager.sponsorBlockEnabled.first() == TRUE && videoId.toLongOrNull() == null) {
+                // SponsorBlock 只索引 YT videoId,网易数字 ID/网易 MV 查询恒空,别白发请求
+                if (dataStoreManager.sponsorBlockEnabled.first() == TRUE &&
+                    videoId.toLongOrNull() == null &&
+                    !videoId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)
+                ) {
                     getSkipSegments(videoId)
                 } else {
                     _skipSegments.value = null
@@ -1326,6 +1337,19 @@ internal class MediaServiceHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
+                // 网易 MV:红心=收藏 MV(mv/sub),无本地镜像行;未登录服务端拒绝→无状态变化
+                if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                    val mvid = id.removePrefix(NETEASE_MV_MEDIA_ID_PREFIX).toLongOrNull() ?: return@launch
+                    val likedNow = _controlState.value.isLiked == true
+                    val ok =
+                        neteaseRepository
+                            .subscribeMv(mvid, !likedNow)
+                            .getOrDefault(false)
+                    if (ok) {
+                        _controlState.value = _controlState.value.copy(isLiked = !likedNow)
+                    }
+                    return@launch
+                }
                 val likedNow = songRepository.getSongById(id).singleOrNull()?.liked == true
                 val ok = songRepository.setRemoteLikeStatus(id, !likedNow).getOrDefault(false)
                 if (ok) {
@@ -1585,6 +1609,10 @@ internal class MediaServiceHandlerImpl(
             if (playlistId.startsWith(NETEASE_PODCAST_RADIO_QUEUE_PREFIX)) {
                 appendNeteasePodcastRadioPage()
             }
+            return
+        }
+        // 网易 MV 队列:单一 MV 实体不是歌,播完即止(无尽钩子任何分支都不进)
+        if (playlistId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
             return
         }
         if (continuation != null) {

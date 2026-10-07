@@ -8,6 +8,7 @@ import com.maxrave.domain.data.entities.PlaylistEntity
 import com.maxrave.domain.data.entities.SongEntity
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_PREFIX
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_SIZE
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.domain.data.model.browse.album.Track
 import com.maxrave.domain.data.model.home.BrowsePage
 import com.maxrave.domain.data.model.home.Content
@@ -80,6 +81,10 @@ import com.maxrave.netease.categoryPlaylistsPaged
 import com.maxrave.netease.playlistCatalog
 import com.maxrave.netease.highQualityPlaylistsPaged
 import com.maxrave.netease.highQualityTags
+import com.maxrave.netease.artistMvs
+import com.maxrave.netease.mvDetail
+import com.maxrave.netease.mvSub
+import com.maxrave.netease.personalizedMv
 import com.maxrave.netease.likeSong
 import com.maxrave.netease.lyric
 import com.maxrave.netease.model.NeteaseAccount
@@ -89,6 +94,8 @@ import com.maxrave.netease.model.NeteaseDjProgram
 import com.maxrave.netease.model.NeteaseDjRadio
 import com.maxrave.netease.model.NeteaseHighQualityTag
 import com.maxrave.netease.model.NeteaseHotWord
+import com.maxrave.netease.model.NeteaseMv
+import com.maxrave.netease.model.NeteaseMvDetail
 import com.maxrave.netease.model.NeteasePlaylist
 import com.maxrave.netease.model.NeteasePodcastCategory
 import com.maxrave.netease.model.NeteaseQuality
@@ -1498,6 +1505,31 @@ class NeteaseRepositoryImpl(
         return song.toSongsResult().toTrack()
     }
 
+    // ===== MV(2026-10-07 明文 API 探针实证;videoId=NETEASE_MV_<mvid> 哨兵,取流/队列/红心按前缀分流) =====
+
+    /** 歌手 MV 分页(歌手页 MV 货架):Track 16:9 缩略图 → toMediaItem 判 VIDEO → 视频层复用 */
+    suspend fun getArtistMvsPaged(
+        artistId: Long,
+        limit: Int = 30,
+        offset: Int = 0,
+    ): Result<Pair<List<Track>, Boolean>> =
+        client.artistMvs(artistId, limit, offset).map { (mvs, hasMore) ->
+            mvs.map { it.toMvTrack() } to hasMore
+        }
+
+    /** MV 详情(播放队列取流/Info 卡/评论线程;含 subed 收藏态) */
+    suspend fun getMvDetail(mvid: Long): Result<NeteaseMvDetail> = client.mvDetail(mvid)
+
+    /** 个性化 MV(网易主页货架;匿名回编辑推荐) */
+    suspend fun getPersonalizedMvs(): Result<List<Track>> =
+        client.personalizedMv().map { list -> list.map { it.toMvTrack() } }
+
+    /** 收藏/取消收藏 MV(播放页红心对 MV 的语义=mv/sub;未登录服务端拒绝→false) */
+    suspend fun subscribeMv(
+        mvid: Long,
+        subscribe: Boolean,
+    ): Result<Boolean> = client.mvSub(mvid, subscribe)
+
     /** 搜歌曲分页页(SONGS tab 加载更多):token="offset:<n>"(null=首页);翻完发 null。
      *  more 判定=offset+本页条数<songCount(拿不到 total 时退"满页即有下一页")。 */
     suspend fun searchSongsPage(
@@ -2291,6 +2323,38 @@ internal fun NeteaseSong.toTrackPlaylist(liked: Boolean = false): com.maxrave.do
         category = null,
         feedbackTokens = null,
         resultType = "song",
+    )
+
+/** MV → 队列 Track:videoId=NETEASE_MV_<mvid> 哨兵;16:9 缩略图(width≠height)驱动
+ *  toMediaItem 的 isSong 启发式判 VIDEO → 视频层/合并工厂全按视频走。封面走 16:9 原图,
+ *  不吃 toNeteaseCoverUrl 的方形 param 变换(会裁坏横版构图)。 */
+internal fun NeteaseMv.toMvTrack(): com.maxrave.domain.data.model.browse.album.Track =
+    com.maxrave.domain.data.model.browse.album.Track(
+        album = null,
+        artists =
+            listOfNotNull(
+                artistId?.let { artistId ->
+                    com.maxrave.domain.data.model.searchResult.songs.Artist(
+                        id = artistId.toString(),
+                        name = artistName ?: "",
+                    )
+                },
+            ),
+        duration = durationMs.toMinutesSeconds(),
+        durationSeconds = (durationMs / 1000).toInt(),
+        isAvailable = true,
+        isExplicit = false,
+        likeStatus = "INDIFFERENT",
+        thumbnails =
+            coverUrl?.let { url ->
+                listOf(com.maxrave.domain.data.model.searchResult.songs.Thumbnail(height = 360, url = url, width = 640))
+            } ?: emptyList(),
+        title = name,
+        videoId = "$NETEASE_MV_MEDIA_ID_PREFIX$id",
+        videoType = null,
+        category = null,
+        feedbackTokens = null,
+        resultType = "mv",
     )
 
 /** 网易封面统一到清晰度安全的尺寸。服务端 URL 常自带 imageView/watermark/thumbnail 处理链

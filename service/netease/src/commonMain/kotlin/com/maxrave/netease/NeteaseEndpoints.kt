@@ -22,6 +22,8 @@ import com.maxrave.netease.model.NeteaseDjRadio
 import com.maxrave.netease.model.NeteaseHighQualityTag
 import com.maxrave.netease.model.NeteaseHotWord
 import com.maxrave.netease.model.NeteaseLyrics
+import com.maxrave.netease.model.NeteaseMv
+import com.maxrave.netease.model.NeteaseMvDetail
 import com.maxrave.netease.model.NeteasePodcastCategory
 import com.maxrave.netease.model.NeteasePlaylist
 import com.maxrave.netease.model.NeteaseQuality
@@ -1726,8 +1728,127 @@ internal fun JsonElement.toSong(): NeteaseSong {
         trackNumber = obj["no"].nInt()?.takeIf { it > 0 },
         discNumber = obj.str("cd")?.takeIf { it.isNotBlank() && it != "0" },
         publishTimeMs = obj["publishTime"].nLong()?.takeIf { it > 0 },
+        // 关联 MV id(明文探针实证:布拉格广场→186025/刀马旦→5287134;无 MV 恒 0)
+        mvId = obj["mv"].nLong()?.takeIf { it > 0 },
     )
 }
+
+// ===== MV(网易 MV 体系,2026-10-07 明文 API 探针实证;匿名可读,收藏需登录) =====
+
+/** MV 摘要条目解析:列表端点字段名不一(imgurl/picUrl/cover、artist 对象/artistName 平级),逐字段兜底 */
+internal fun JsonObject.toMv(): NeteaseMv =
+    NeteaseMv(
+        id = this["id"].nLong() ?: 0L,
+        name = str("name").orEmpty(),
+        coverUrl = (str("imgurl16v9") ?: str("imgurl") ?: str("picUrl") ?: str("cover"))?.toHttpsUrl(),
+        durationMs = this["duration"].nLong() ?: 0L,
+        playCount = this["playCount"].nLong(),
+        publishTimeStr = str("publishTime"),
+        artistId = obj("artist")?.get("id").nLong() ?: this["artistId"].nLong(),
+        artistName = obj("artist")?.str("name") ?: str("artistName"),
+    )
+
+/** /api/artist/mvs:歌手 MV 分页列表(匿名;hasMore=1 即还有下一页) */
+suspend fun NeteaseClient.artistMvs(
+    artistId: Long,
+    limit: Int = 30,
+    offset: Int = 0,
+): Result<Pair<List<NeteaseMv>, Boolean>> =
+    runCatching {
+        val body =
+            callApi(
+                "/artist/mvs",
+                linkedMapOf("artistId" to artistId, "limit" to limit, "offset" to offset),
+            )
+        val mvs = body.array("mvs")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
+        mvs to (body["hasMore"].nInt() == 1)
+    }
+
+/** /api/mv/detail:MV 详情+brs 分辨率直链(subed 在响应顶层,登录后反映真实收藏态) */
+suspend fun NeteaseClient.mvDetail(mvid: Long): Result<NeteaseMvDetail> =
+    runCatching {
+        val body = callApi("/mv/detail", linkedMapOf("id" to mvid))
+        val data = body.obj("data") ?: error("mv/detail missing data")
+        NeteaseMvDetail(
+            id = data["id"].nLong() ?: mvid,
+            name = data.str("name").orEmpty(),
+            coverUrl = data.str("cover")?.toHttpsUrl(),
+            durationMs = data["duration"].nLong() ?: 0L,
+            playCount = data["playCount"].nLong(),
+            likeCount = data["likeCount"].nLong(),
+            subCount = data["subCount"].nLong(),
+            shareCount = data["shareCount"].nLong(),
+            commentCount = data["commentCount"].nLong(),
+            publishTimeStr = data.str("publishTime"),
+            description = data.str("desc"),
+            briefDesc = data.str("briefDesc"),
+            commentThreadId = data.str("commentThreadId"),
+            subed = body["subed"]?.let { (it as? JsonPrimitive)?.content?.toBooleanStrictOrNull() },
+            brs =
+                (data.obj("brs") ?: JsonObject(emptyMap())).entries
+                    .mapNotNull { (k, v) ->
+                        k.toIntOrNull()?.let { res ->
+                            (v as? JsonPrimitive)?.content?.takeIf { it.isNotEmpty() }?.let { res to it }
+                        }
+                    }.toMap(),
+            artists =
+                data.array("artists")?.mapNotNull { a ->
+                    (a as? JsonObject)?.let {
+                        (it["id"].nLong() ?: 0L) to (it.str("name") ?: "")
+                    }
+                } ?: emptyList(),
+        )
+    }
+
+/** /api/personalized/mv:个性化 MV 推荐(主页货架;匿名回编辑推荐) */
+suspend fun NeteaseClient.personalizedMv(): Result<List<NeteaseMv>> =
+    runCatching {
+        val body = callApi("/personalized/mv", emptyMap())
+        body.array("result")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
+    }
+
+/** /api/mv/first:最新 MV 分页(area 空串=全部) */
+suspend fun NeteaseClient.mvFirst(
+    limit: Int = 30,
+    area: String = "",
+): Result<List<NeteaseMv>> =
+    runCatching {
+        val body =
+            callApi(
+                "/mv/first",
+                linkedMapOf("limit" to limit, "area" to area),
+            )
+        body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
+    }
+
+/** /api/mv/sublist:收藏的 MV 分页(需登录;匿名回空列表) */
+suspend fun NeteaseClient.mvSublist(
+    limit: Int = 30,
+    offset: Int = 0,
+): Result<Pair<List<NeteaseMv>, Boolean>> =
+    runCatching {
+        val body =
+            callApi(
+                "/mv/sublist",
+                linkedMapOf("limit" to limit, "offset" to offset),
+            )
+        val mvs = body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
+        mvs to (body["hasMore"].nInt() == 1)
+    }
+
+/** /api/mv/sub:收藏/取消收藏 MV(weapi,需登录;t=1 收藏 t=0 取消;成功 code=200) */
+suspend fun NeteaseClient.mvSub(
+    mvid: Long,
+    subscribe: Boolean,
+): Result<Boolean> =
+    runCatching {
+        val body =
+            callWeApi(
+                "/mv/sub",
+                linkedMapOf("mvid" to mvid, "t" to if (subscribe) 1 else 0),
+            )
+        body["code"].nInt() == 200
+    }
 
 /** 从 playlist 形状映射;rawSpecialType 为网易原生 specialType(5=红心歌单) */
 internal fun JsonElement.toPlaylist(): NeteasePlaylist {

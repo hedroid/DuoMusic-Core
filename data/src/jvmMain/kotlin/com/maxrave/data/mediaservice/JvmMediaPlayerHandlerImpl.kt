@@ -14,6 +14,7 @@ import com.maxrave.common.LOCAL_PLAYLIST_ID
 import com.maxrave.common.LOCAL_PLAYLIST_ID_SAVED_QUEUE
 import com.maxrave.common.MERGING_DATA_TYPE
 import com.maxrave.common.NETEASE_FM_PLAYLIST_ID
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_RADIO_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_RADIO_APPEND_BATCH
@@ -1328,6 +1329,11 @@ class JvmMediaPlayerHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
+                // 网易 MV:红心=收藏 MV(mv/sub);jvm 无 netease 写通道,置态即止
+                if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                    _controlState.value = _controlState.value.copy(isLiked = _controlState.value.isLiked != true)
+                    return@launch
+                }
                 // 方向判据现读 Room(显示态同源):controlState.isLiked 只在切歌/controlState
                 // 变化时刷新,云村红心 OR-merge 的回填写 Room 不会触发它——按它判方向会把
                 // "取消已赞"发成"点赞"(歌永远留在红心歌单)。
@@ -1597,6 +1603,10 @@ class JvmMediaPlayerHandlerImpl(
             if (playlistId.startsWith(NETEASE_PODCAST_RADIO_QUEUE_PREFIX)) {
                 appendNeteasePodcastRadioPage()
             }
+            return
+        }
+        // 网易 MV 队列:单一 MV 实体不是歌,播完即止(无尽钩子任何分支都不进)
+        if (playlistId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
             return
         }
         if (continuation != null) {

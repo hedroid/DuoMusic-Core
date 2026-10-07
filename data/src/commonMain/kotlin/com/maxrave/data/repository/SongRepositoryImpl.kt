@@ -1,6 +1,7 @@
 package com.maxrave.data.repository
 
 import com.maxrave.common.MERGING_DATA_TYPE
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_PREFIX
 import com.maxrave.common.NETEASE_RADIO_BATCH_SIZE
 import com.maxrave.data.db.datasource.LocalDataSource
@@ -499,10 +500,10 @@ internal class SongRepositoryImpl(
                     } else {
                         videoId
                     }
-                // 网易歌(纯数字 id):YT next+RYD 对数字 ID 必失败(400/Unknown),
-                // 白打两个请求还刷 logcat——与 SponsorBlock/MediaServiceHandler 同款短路,
-                // 直接读本地缓存兜底(与 onFailure 分支行为一致)
-                if (id.toLongOrNull() != null) {
+                // 网易歌(纯数字 id)与网易 MV(NETEASE_MV_ 哨兵):YT next+RYD 对这些 id
+                // 必失败(400/Unknown),白打两个请求还刷 logcat——与 SponsorBlock/
+                // MediaServiceHandler 同款短路,直接读本地缓存兜底(与 onFailure 分支行为一致)
+                if (id.toLongOrNull() != null || id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
                     emit(getSongInfoEntity(videoId).lastOrNull())
                     return@flow
                 }

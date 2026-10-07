@@ -2,6 +2,7 @@ package com.maxrave.data.repository
 
 import com.maxrave.common.ITAG
 import com.maxrave.common.MERGING_DATA_TYPE
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.QUALITY
 import com.maxrave.common.VIDEO_QUALITY
 import com.maxrave.data.db.datasource.LocalDataSource
@@ -142,6 +143,28 @@ internal class StreamRepositoryImpl(
         muxed: Boolean,
     ): Flow<String?> =
         flow {
+            // 网易 MV(NETEASE_MV_<mvid> 哨兵):mv/detail 的 brs 分辨率直链,单文件 mp4 自带
+            // 音轨(播放/下载同一 URL,无需 YT 式双流)。链接带 wsSecret 签名有时效 → 每次播放
+            // 现取(与网易音频 10 分钟窗口同语义)。2026-10-07 明文探针实证:brs 206+video/mp4。
+            if (videoId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                val mvid = videoId.removePrefix(NETEASE_MV_MEDIA_ID_PREFIX).toLongOrNull()
+                val detail = mvid?.let { neteaseRepository.getMvDetail(it).getOrNull() }
+                val brs = detail?.brs
+                if (brs.isNullOrEmpty()) {
+                    Logger.w("Stream", "MV stream unavailable for $videoId")
+                    emit(null)
+                    return@flow
+                }
+                // 按视频清晰度设置选 ≤ 偏好的最大档;MV 无 360p 档,选不到就取最小可用档
+                val wanted =
+                    dataStoreManager.videoQuality.first().removeSuffix("p").toIntOrNull() ?: 720
+                val candidates = brs.keys.filter { it in 240..1080 }.sorted()
+                val pick = candidates.lastOrNull { it <= wanted } ?: candidates.firstOrNull()
+                val url = pick?.let { brs[it] }
+                Logger.w("Stream", "MV $videoId picked ${pick}p -> $url")
+                emit(url)
+                return@flow
+            }
             // 网易歌曲:videoId 为纯数字(YT id 固定 11 位含字母,不会撞)。数字即网易,
             // 走网易取流 —— 音质降级链/试听判定在 NeteaseRepositoryImpl.getStreamUrl 内。
             // null(灰歌/仅试听)的后续动作在 MediaServiceHandler 按设置分流:

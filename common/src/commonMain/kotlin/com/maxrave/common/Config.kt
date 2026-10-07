@@ -695,6 +695,14 @@ const val NETEASE_PODCAST_QUEUE_PREFIX = "NETEASE_PODCAST_"
 /** 网易播客电台队列前缀：loadMore 续本台节目下一页（byradio offset 分页，播完即止）。 */
 const val NETEASE_PODCAST_RADIO_QUEUE_PREFIX = "NETEASE_PODCAST_RADIO_"
 
+/**
+ * 网易 MV 队列/媒体 id 哨兵前缀：`NETEASE_MV_<mvid>`。MV id 与歌曲 id 同为纯数字，
+ * 不加前缀会撞"纯数字=网易歌"的取流路由（送进音频 songUrl 端点）；带前缀后
+ * getStream 按前缀分流到 mv/detail 的 brs 分辨率直链（单文件 mp4 自带音轨）。
+ * loadMore 见此队列前缀即止（MV 是独立实体不是歌，不走无尽电台）。
+ */
+const val NETEASE_MV_MEDIA_ID_PREFIX = "NETEASE_MV_"
+
 /** 网易歌单每页曲目数（playlistDetail 拿 trackIds 后 songDetail 分片的批大小） */
 const val NETEASE_PLAYLIST_PAGE_SIZE = 500
 

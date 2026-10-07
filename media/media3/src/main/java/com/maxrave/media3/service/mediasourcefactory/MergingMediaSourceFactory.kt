@@ -9,6 +9,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import com.maxrave.common.MERGING_DATA_TYPE
+import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.domain.data.player.LiveStreamRegistry
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.logger.Logger
@@ -53,6 +54,11 @@ internal class MergingMediaSourceFactory(
         Logger.w("Merging Media Source", mediaItem.mediaMetadata.description.toString())
         val getVideo = runBlocking(Dispatchers.IO) { dataStoreManager.watchVideoInsteadOfPlayingAudio.first() } == DataStoreManager.Values.TRUE
         Logger.w("Merging Media Source", getVideo.toString())
+        // 网易 MV:单文件 mp4 自带音轨,绝不走双流合并——同一 mp4 当 video+audio 两个分支
+        // 各拉一遍是纯浪费,且部分合并路径会因容器里只有一路而失真
+        if (mediaItem.mediaId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) || mediaItem.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO).startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+            return defaultMediaSourceFactory.createMediaSource(mediaItem)
+        }
         if (mediaItem.mediaMetadata.description == MERGING_DATA_TYPE.VIDEO && getVideo) {
             val videoItem =
                 mediaItem
