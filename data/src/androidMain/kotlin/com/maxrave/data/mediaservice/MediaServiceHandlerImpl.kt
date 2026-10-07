@@ -3856,6 +3856,11 @@ internal class MediaServiceHandlerImpl(
         super.onTimelineChanged(list, reason)
         Logger.d(TAG, "onTimelineChanged: Reason: $reason, Items: ${list.size}")
         reorderShuffledQueue(list)
+        // 可用性补算:adapter 的 clear/set/move 等都是 launch 异步改镜像 index,而 load() 尾的
+        // updateNextPreviousTrackAvailability 是同步快照——点最后一首时快照落在 move 协程前,
+        // 读到移动前 index(下一首亮)/点第一首落到旧队列 index 残值(上一首亮),偶发错位
+        // (2026-10-07 用户反馈)。timeline 变化必在镜像更新之后到达,这里补算保证终态正确。
+        updateNextPreviousTrackAvailability()
     }
 
     override fun onCastStateChanged(castState: GenericCastState) {
