@@ -683,22 +683,18 @@ internal class CrossfadeExoPlayerAdapter(
                             0,
                             0,
                         )
-                        // The four-times duration above is meant to keep roughly 200 seconds
-                        // ahead for tunnels and other brief network gaps. Media3 otherwise stops
-                        // loading as soon as its default 13 MiB audio allocation is full, which
-                        // can be less than a minute of high-bitrate lossless audio. Make the time
-                        // target authoritative so every quality tier gets the same resilience.
-                        .setPrioritizeTimeOverSizeThresholds(true)
-                        // ...but bounded by an explicit byte cap (verified against media3 1.11
-                        // bytecode: totalBufferBytesAllocated >= targetBufferBytes returns BEFORE
-                        // the time-priority branch, so the cap holds even with the flag above).
-                        // Without it, "current + 2 precaches × 200s of sample data IN THE JAVA
-                        // HEAP" walks straight into the 192MB Dalvik limit on long sessions
-                        // (user crash: ~25min listening → OOM in shouldContinueLoading; FLAC
-                        // ~27MB/player, Hi-Res tiers up to ~75MB). Current player keeps the full
-                        // 200s for lossless (24MB < 32MB cap); only pathologically high bitrates
-                        // are cut short. Precaches need only enough head of audio for a seamless
-                        // promote, not tunnel resilience - 16MB is ~2 minutes of lossless.
+                        // Aim for up to 200 seconds, but stop at the byte targets below when
+                        // high-bitrate audio or video reaches them first. In Media3 1.11.1,
+                        // prioritizeTimeOverSizeThresholds=true ignores targetBufferBytes while
+                        // the heap has headroom. A 126 MB local MV then retained 1,467 × 64 KiB
+                        // allocations (~92 MiB) in the current player alone despite a 32 MiB
+                        // target; a precache added another 357 allocations (~22 MiB), exhausting
+                        // the emulator's 192 MiB Java heap. The false value applies to both local
+                        // and network playback and makes the byte targets effective.
+                        .setPrioritizeTimeOverSizeThresholds(false)
+                        // Lossless audio at ordinary bitrates can still reach the time target;
+                        // large video and unusually high bitrate streams stop at the byte target.
+                        // Precaches only need enough buffered head for a seamless handoff.
                         .setTargetBufferBytes(
                             if (precache) PRECACHE_TARGET_BUFFER_BYTES else CURRENT_TARGET_BUFFER_BYTES,
                         )
