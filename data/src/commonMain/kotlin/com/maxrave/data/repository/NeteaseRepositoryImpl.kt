@@ -1374,10 +1374,13 @@ class NeteaseRepositoryImpl(
         parentCommentId: Long,
         limit: Int,
         time: Long,
+        threadId: String? = null,
     ): Pair<List<NeteaseSongInfoEntity.HotComment>, Long?>? {
-        val id = songId.toLongOrNull() ?: return null
+        val id = songId.toLongOrNull()
+            ?: (threadId?.takeIf { it.isNotEmpty() }?.let { 0L })
+            ?: return null
         val page =
-            client.commentFloor(id, parentCommentId, time = time, limit = limit).getOrNull() ?: run {
+            client.commentFloor(id, parentCommentId, time = time, limit = limit, threadId = threadId).getOrNull() ?: run {
                 com.maxrave.logger.Logger.w("NeteaseComments", "floor fetch failed for $parentCommentId")
                 return null
             }
@@ -1519,6 +1522,15 @@ class NeteaseRepositoryImpl(
 
     /** MV 详情(播放队列取流/Info 卡/评论线程;含 subed 收藏态) */
     suspend fun getMvDetail(mvid: Long): Result<NeteaseMvDetail> = client.mvDetail(mvid)
+
+    /** MV → 队列 Track(菜单"看 MV"/货架起播共用):null=详情拉取失败 */
+    suspend fun getMvTrack(mvid: Long): Track? = getMvDetail(mvid).getOrNull()?.toMvTrack()
+
+    /** 歌曲→关联 MV id(菜单"看 MV"解析):0/null=无 MV */
+    suspend fun getNeteaseSongMvId(songId: String): Long? {
+        val id = songId.toLongOrNull() ?: return null
+        return client.songDetail(listOf(id)).getOrNull()?.firstOrNull()?.mvId
+    }
 
     /** 个性化 MV(网易主页货架;匿名回编辑推荐) */
     suspend fun getPersonalizedMvs(): Result<List<Track>> =
@@ -2340,6 +2352,33 @@ internal fun NeteaseMv.toMvTrack(): com.maxrave.domain.data.model.browse.album.T
                     )
                 },
             ),
+        duration = durationMs.toMinutesSeconds(),
+        durationSeconds = (durationMs / 1000).toInt(),
+        isAvailable = true,
+        isExplicit = false,
+        likeStatus = "INDIFFERENT",
+        thumbnails =
+            coverUrl?.let { url ->
+                listOf(com.maxrave.domain.data.model.searchResult.songs.Thumbnail(height = 360, url = url, width = 640))
+            } ?: emptyList(),
+        title = name,
+        videoId = "$NETEASE_MV_MEDIA_ID_PREFIX$id",
+        videoType = null,
+        category = null,
+        feedbackTokens = null,
+        resultType = "mv",
+    )
+
+internal fun NeteaseMvDetail.toMvTrack(): com.maxrave.domain.data.model.browse.album.Track =
+    com.maxrave.domain.data.model.browse.album.Track(
+        album = null,
+        artists =
+            artists.take(1).map { (id, name) ->
+                com.maxrave.domain.data.model.searchResult.songs.Artist(
+                    id = id.toString(),
+                    name = name,
+                )
+            },
         duration = durationMs.toMinutesSeconds(),
         durationSeconds = (durationMs / 1000).toInt(),
         isAvailable = true,
