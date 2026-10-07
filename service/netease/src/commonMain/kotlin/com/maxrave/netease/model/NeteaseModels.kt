@@ -116,6 +116,13 @@ data class NeteaseMv(
     val artistName: String? = null,
 )
 
+/** 收藏的 MV 分页响应(mv/sublist):count=收藏总数 */
+data class NeteaseMvSublist(
+    val mvs: List<NeteaseMv>,
+    val hasMore: Boolean,
+    val count: Int,
+)
+
 /** MV 详情(/api/mv/detail):brs 分辨率直链 + 互动计数 + 评论线程 id。匿名可取,登录带 subed */
 data class NeteaseMvDetail(
     val id: Long,

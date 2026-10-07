@@ -84,6 +84,9 @@ import com.maxrave.netease.highQualityTags
 import com.maxrave.netease.artistMvs
 import com.maxrave.netease.mvDetail
 import com.maxrave.netease.mvSub
+import com.maxrave.netease.mvFirst
+import com.maxrave.netease.mvSublist
+import com.maxrave.netease.mvToplist
 import com.maxrave.netease.personalizedMv
 import com.maxrave.netease.likeSong
 import com.maxrave.netease.lyric
@@ -1536,9 +1539,32 @@ class NeteaseRepositoryImpl(
         return client.songDetail(listOf(id)).getOrNull()?.firstOrNull()?.mvId
     }
 
-    /** 个性化 MV(网易主页货架;匿名回编辑推荐) */
+    /** 个性化 MV(编辑推荐,探针实证每日仅 2-3 条;主页已换 latest 数据源,端点保留备用) */
     suspend fun getPersonalizedMvs(): Result<List<Track>> =
         client.personalizedMv().map { list -> list.map { it.toMvTrack() } }
+
+    /** 最新 MV(mv/first,主页货架):无 offset 分页,一次 30 条封顶 */
+    suspend fun getMvFirst(): Result<List<Track>> =
+        client.mvFirst(limit = 30).map { list -> list.map { it.toMvTrack() } }
+
+    /** MV 总榜(mv/toplist,主页货架):offset 分页 50 条到头,排名=列表顺序 */
+    suspend fun getMvToplist(
+        limit: Int = 30,
+        offset: Int = 0,
+    ): Result<Pair<List<Track>, Boolean>> =
+        client.mvToplist(limit, offset).map { (mvs, hasMore) -> mvs.map { it.toMvTrack() } to hasMore }
+
+    /** 收藏的 MV 分页(mv/sublist,需登录):列表页用 */
+    suspend fun getMvSublistPaged(
+        limit: Int = 30,
+        offset: Int = 0,
+    ): Result<Pair<List<Track>, Boolean>> =
+        client.mvSublist(limit, offset).map { it.mvs.map { mv -> mv.toMvTrack() } to it.hasMore }
+
+    /** 收藏的 MV 概要(库页行):总数+首条封面;null=拉取失败/未登录空集 */
+    suspend fun getMvSublistSummary(): Pair<Int, String?>? =
+        client.mvSublist(limit = 1, offset = 0).getOrNull()
+            ?.let { sub -> sub.count to sub.mvs.firstOrNull()?.coverUrl }
 
     /** 收藏/取消收藏 MV(播放页红心对 MV 的语义=mv/sub;未登录服务端拒绝→false) */
     suspend fun subscribeMv(

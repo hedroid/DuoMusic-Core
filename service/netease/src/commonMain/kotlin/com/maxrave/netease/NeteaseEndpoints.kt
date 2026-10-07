@@ -24,6 +24,7 @@ import com.maxrave.netease.model.NeteaseHotWord
 import com.maxrave.netease.model.NeteaseLyrics
 import com.maxrave.netease.model.NeteaseMv
 import com.maxrave.netease.model.NeteaseMvDetail
+import com.maxrave.netease.model.NeteaseMvSublist
 import com.maxrave.netease.model.NeteasePodcastCategory
 import com.maxrave.netease.model.NeteasePlaylist
 import com.maxrave.netease.model.NeteaseQuality
@@ -1825,15 +1826,33 @@ suspend fun NeteaseClient.mvFirst(
         body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
     }
 
-/** /api/mv/sublist:收藏的 MV 分页(需登录;匿名回空列表) */
+/** /api/mv/sublist:收藏的 MV 分页(需登录;匿名回空列表)。count 为收藏总数(行概要用) */
 suspend fun NeteaseClient.mvSublist(
+    limit: Int = 30,
+    offset: Int = 0,
+): Result<NeteaseMvSublist> =
+    runCatching {
+        val body =
+            callApi(
+                "/mv/sublist",
+                linkedMapOf("limit" to limit, "offset" to offset),
+            )
+        NeteaseMvSublist(
+            mvs = body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList(),
+            hasMore = body["hasMore"].nInt() == 1,
+            count = body["count"].nInt() ?: 0,
+        )
+    }
+
+/** /api/mv/toplist:MV 总榜(排名=data 顺序,条目带 lastRank/score;offset 分页 50 条到头) */
+suspend fun NeteaseClient.mvToplist(
     limit: Int = 30,
     offset: Int = 0,
 ): Result<Pair<List<NeteaseMv>, Boolean>> =
     runCatching {
         val body =
             callApi(
-                "/mv/sublist",
+                "/mv/toplist",
                 linkedMapOf("limit" to limit, "offset" to offset),
             )
         val mvs = body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
