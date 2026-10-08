@@ -2366,7 +2366,7 @@ internal class MediaServiceHandlerImpl(
     override suspend fun loadMoreCatalog(
         listTrack: ArrayList<Track>,
         isAddToQueue: Boolean,
-    ) {
+    ): Boolean {
         Logger.d("Queue", listTrack.map { it.title }.toString())
         _queueData.update {
             it.copy(
@@ -2374,8 +2374,21 @@ internal class MediaServiceHandlerImpl(
             )
         }
         val catalogMetadata: ArrayList<Track> = arrayListOf()
+        // Add-to-queue dedup (2026-10-08): a track already queued stays where it is — adding a
+        // second copy of the same id would play it twice. The set doubles as the batch-local
+        // registry because addMediaItemNotSet lands asynchronously, so entries added earlier
+        // in this same loop are not in the timeline snapshot yet.
+        val queuedIds: MutableSet<String>? =
+            if (isAddToQueue) {
+                player
+                    .getCurrentMediaTimeLine()
+                    .mapTo(HashSet()) { it.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO) }
+            } else {
+                null
+            }
         for (i in 0 until listTrack.size) {
             val track = listTrack[i]
+            if (queuedIds != null && !queuedIds.add(track.videoId)) continue
             var thumbUrl =
                 track.thumbnails?.lastOrNull()?.url
                     ?: "http://i.ytimg.com/vi/${track.videoId}/maxresdefault.jpg"
@@ -2489,6 +2502,7 @@ internal class MediaServiceHandlerImpl(
         // known to be aligned again.
         trimRadioHistoryIfNeeded()
         reorderShuffledQueue(player.getCurrentMediaTimeLine())
+        return catalogMetadata.isNotEmpty()
     }
 
     override suspend fun updateCatalog(
@@ -2736,6 +2750,30 @@ internal class MediaServiceHandlerImpl(
     }
 
     override suspend fun playNext(track: Track) {
+        // Already queued: move the existing entry up instead of inserting a second copy of
+        // the same id (it would otherwise play twice). The timeline change realigns
+        // queueData.listTracks via reorderShuffledQueue, same as the insert path below.
+        val timeline = player.getCurrentMediaTimeLine()
+        val existingIndex =
+            timeline.indexOfFirst {
+                it.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO) == track.videoId
+            }
+        if (existingIndex >= 0) {
+            val current = player.currentMediaItemIndex
+            if (existingIndex != current) {
+                // Media3 takes newIndex in the post-removal numbering: an upcoming entry
+                // slots straight at current+1, an already-played one lands at current
+                // (removing it first shifts the current track and everything after up).
+                val target = if (existingIndex > current) current + 1 else current
+                moveMediaItem(existingIndex, target)
+            }
+            _queueData.update {
+                it.copy(
+                    queueState = QueueData.StateSource.STATE_INITIALIZED,
+                )
+            }
+            return
+        }
         _queueData.update {
             it.copy(
                 queueState = QueueData.StateSource.STATE_INITIALIZING,

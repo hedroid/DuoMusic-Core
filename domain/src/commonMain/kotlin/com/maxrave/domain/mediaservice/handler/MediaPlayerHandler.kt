@@ -119,10 +119,12 @@ interface MediaPlayerHandler {
         index: Int? = null,
     )
 
+    /** Returns true when at least one track was actually appended; false means every
+     * track was already in the queue and nothing changed (isAddToQueue dedup). */
     suspend fun loadMoreCatalog(
         listTrack: ArrayList<Track>,
         isAddToQueue: Boolean = false,
-    )
+    ): Boolean
 
     suspend fun updateCatalog(
         downloaded: Int = 0,
