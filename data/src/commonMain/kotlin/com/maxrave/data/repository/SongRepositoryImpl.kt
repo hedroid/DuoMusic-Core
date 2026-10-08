@@ -7,6 +7,7 @@ import com.maxrave.common.NETEASE_RADIO_BATCH_SIZE
 import com.maxrave.data.db.datasource.LocalDataSource
 import com.maxrave.data.extension.getFullDataFromDB
 import com.maxrave.data.mapping.toListTrack
+import com.maxrave.data.mapping.toTrack
 import com.maxrave.data.mapping.toSongItemForDownload
 import com.maxrave.data.mapping.toWatchEndpoint
 import com.maxrave.domain.data.entities.QueueEntity
@@ -52,6 +53,45 @@ internal class SongRepositoryImpl(
     private val localDataSource: LocalDataSource,
     private val youTube: YouTube,
 ) : SongRepository {
+    override suspend fun findMusicVideos(videoId: String, title: String, artist: String?): List<Track> =
+        withContext(Dispatchers.IO) {
+            // The Song/Video switch gives one linked rendition. Search adds other official
+            // uploads of the same recording; it is never safe to play the first search hit.
+            val linkedResult = youTube.next(WatchEndpoint(videoId = videoId))
+            val linked =
+                linkedResult.getOrNull()
+                    ?.items?.firstOrNull { it.id == videoId }
+                    ?.counterpart?.takeIf { MusicVideoType.isVideoSong(it.musicVideoType) }
+                    ?.toTrack()
+            val normalizedTitle = title.mvSearchKey()
+            val normalizedArtist = artist?.mvSearchKey().orEmpty()
+            val searchResult =
+                youTube.search("$title ${artist.orEmpty()} official music video", YouTube.SearchFilter.FILTER_VIDEO)
+            val searched =
+                searchResult.getOrNull()?.items.orEmpty()
+                    .filterIsInstance<SongItem>()
+                    .filter { item ->
+                        item.musicVideoType == "MUSIC_VIDEO_TYPE_OMV" &&
+                            normalizedTitle.isNotEmpty() &&
+                            item.title.mvSearchKey().contains(normalizedTitle) &&
+                            (normalizedArtist.isEmpty() ||
+                                item.artists.any { it.name.mvSearchKey() == normalizedArtist } ||
+                                item.title.mvSearchKey().contains(normalizedArtist))
+                    }.map { it.toTrack() }
+            val results = (listOfNotNull(linked) + searched).distinctBy { it.videoId }
+            // 只有双路查询都成功且为空,才可信"没有 MV":任一路失败(网络/风控)而结果
+            // 为空,是"是否存在未知"——失败的那路(歌曲/视频切换的关联 rendition 往往
+            // 是最权威命中)可能本有结果,折叠成空列表会把请求失败误报成搜索无结果
+            if (results.isEmpty() && (linkedResult.isFailure || searchResult.isFailure)) {
+                throw searchResult.exceptionOrNull()
+                    ?: linkedResult.exceptionOrNull()
+                    ?: IllegalStateException("mv lookup failed")
+            }
+            results
+        }
+
+    private fun String.mvSearchKey(): String = lowercase().filter { it.isLetterOrDigit() }
+
     override fun getAllSongs(limit: Int): Flow<List<SongEntity>> =
         flow {
             emit(localDataSource.getAllSongs(limit))

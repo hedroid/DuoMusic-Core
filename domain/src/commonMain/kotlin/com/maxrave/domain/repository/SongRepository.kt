@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.datetime.LocalDateTime
 
 interface SongRepository {
+    /** Official YTM video candidates for a song, with its linked rendition first when available. */
+    suspend fun findMusicVideos(videoId: String, title: String, artist: String?): List<Track>
+
     fun getAllSongs(limit: Int): Flow<List<SongEntity>>
 
     suspend fun setInLibrary(

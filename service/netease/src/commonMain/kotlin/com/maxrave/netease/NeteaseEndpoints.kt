@@ -1528,13 +1528,14 @@ suspend fun NeteaseClient.commentLike(
     songId: Long,
     commentId: Long,
     like: Boolean,
+    threadId: String = "R_SO_4_$songId",
 ): Result<Unit> =
     runCatching {
         val body =
             callXeApi(
                 "/v1/comment/${if (like) "like" else "unlike"}",
                 linkedMapOf(
-                    "threadId" to "R_SO_4_$songId",
+                    "threadId" to threadId,
                     "commentId" to commentId.toString(),
                 ),
             )
@@ -1552,13 +1553,14 @@ suspend fun NeteaseClient.commentLike(
 suspend fun NeteaseClient.commentAdd(
     songId: Long,
     content: String,
+    threadId: String = "R_SO_4_$songId",
 ): Result<Long?> =
     commentWrite(
         "/resource/comments/add",
         linkedMapOf(
-            "threadId" to "R_SO_4_$songId",
+            "threadId" to threadId,
             "content" to content,
-            "resourceType" to "0",
+            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else "0",
             "expressionPicId" to "-1",
             "bubbleId" to "-1",
         ),
@@ -1569,14 +1571,15 @@ suspend fun NeteaseClient.commentReply(
     songId: Long,
     parentCommentId: Long,
     content: String,
+    threadId: String = "R_SO_4_$songId",
 ): Result<Long?> =
     commentWrite(
         "/v1/resource/comments/reply",
         linkedMapOf(
-            "threadId" to "R_SO_4_$songId",
+            "threadId" to threadId,
             "commentId" to parentCommentId.toString(),
             "content" to content,
-            "resourceType" to "0",
+            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else "0",
         ),
     )
 
@@ -1651,7 +1654,7 @@ suspend fun NeteaseClient.songCommentsV2(
         val data = body.obj("data")
         NeteaseCommentPageV2(
             comments = data?.array("comments").orEmpty().mapNotNull { parseNeteaseComment(it.jsonObject) },
-            totalCount = data?.get("totalCount")?.nInt() ?: 0,
+            totalCount = data?.get("totalCount")?.nInt(),
             hasMore = (data?.get("hasMore") as? JsonPrimitive)?.content == "true",
             cursor = data?.str("cursor"),
         )

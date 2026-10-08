@@ -178,7 +178,7 @@ data class NeteaseCommentListPage(
     val hasMore: Boolean,
     val nextCursor: String?,
     /** 服务端总数(v2 data.totalCount);节目线程与歌曲线程数不同,UI 用它刷新标题 */
-    val totalCount: Int = 0,
+    val totalCount: Int? = null,
 )
 
 /**
@@ -1418,10 +1418,12 @@ class NeteaseRepositoryImpl(
         songId: String,
         commentId: Long,
         like: Boolean,
+        threadId: String? = null,
     ): Result<Unit> =
-        (songId.toLongOrNull()
-            ?.let { client.commentLike(it, commentId, like) }
-            ?: Result.failure(IllegalArgumentException("songId not numeric: $songId")))
+        commentTarget(songId, threadId).fold(
+            onSuccess = { (id, thread) -> client.commentLike(id, commentId, like, thread) },
+            onFailure = { Result.failure(it) },
+        )
 
     /**
      * 发表/回复歌曲评论(xeapi 写通道,官方 App 9.5.x 起唯一通路)。replyTo 非空=回复。
@@ -1431,11 +1433,24 @@ class NeteaseRepositoryImpl(
         songId: String,
         content: String,
         replyTo: Long? = null,
-    ): Result<Unit> {
-        val id = songId.toLongOrNull() ?: return Result.failure(IllegalArgumentException("songId not numeric: $songId"))
-        return (if (replyTo != null) client.commentReply(id, replyTo, content) else client.commentAdd(id, content))
-            .map { }
+        threadId: String? = null,
+    ): Result<Long?> {
+        val (id, thread) = commentTarget(songId, threadId).getOrElse { return Result.failure(it) }
+        return (if (replyTo != null) client.commentReply(id, replyTo, content, thread) else client.commentAdd(id, content, thread))
     }
+
+    private fun commentTarget(songId: String, threadId: String?): Result<Pair<Long, String>> =
+        runCatching {
+            if (songId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                val id = songId.removePrefix(NETEASE_MV_MEDIA_ID_PREFIX).toLong()
+                val expected = "R_MV_5_$id"
+                require(threadId == null || threadId == expected) { "MV comment thread mismatch" }
+                id to expected
+            } else {
+                val id = songId.toLong()
+                id to "R_SO_4_$id"
+            }
+        }
 
     /**
      * 播放页网易详情卡:艺人(头像/粉丝)、专辑(发行日/简介)、互动(红心/评论)五路数据
@@ -1530,8 +1545,43 @@ class NeteaseRepositoryImpl(
     /** MV 详情(播放队列取流/Info 卡/评论线程;含 subed 收藏态) */
     suspend fun getMvDetail(mvid: Long): Result<NeteaseMvDetail> = client.mvDetail(mvid)
 
+    /** MV 播放页艺人卡；详情本身只含艺人 id/名称，头像和粉丝数独立降级。 */
+    suspend fun getMvArtistInfo(detail: NeteaseMvDetail): NeteaseSongInfoEntity {
+        val (artistId, artistName) = detail.artists.firstOrNull()
+            ?: return NeteaseSongInfoEntity()
+        return coroutineScope {
+            val artistDef = async { client.artistDetail(artistId).getOrNull() }
+            val followersDef = async { client.artistFollowerCount(artistId).getOrNull() }
+            val artist = artistDef.await()
+            NeteaseSongInfoEntity(
+                artistId = artistId.toString(),
+                artistName = artist?.name ?: artistName,
+                artistAvatar = artist?.picUrl?.replaceFirst("http://", "https://")?.toNeteaseCoverUrl(1080),
+                artistFans = followersDef.await(),
+                artistBriefDesc = artist?.briefDesc?.takeIf { it.isNotBlank() },
+            )
+        }
+    }
+
     /** MV → 队列 Track(菜单"看 MV"/货架起播共用):null=详情拉取失败 */
     suspend fun getMvTrack(mvid: Long): Track? = getMvDetail(mvid).getOrNull()?.toMvTrack()
+
+    /** 已取得 mv/detail 时直接复用，下载管理页重试不再重复请求详情。 */
+    fun mvTrackFromDetail(detail: NeteaseMvDetail): Track = detail.toMvTrack()
+
+    /** MV 详情不带歌曲 ID；只接受搜索结果中 mv 字段精确指回该 MV 的歌曲。 */
+    suspend fun getMvLinkedSongId(detail: NeteaseMvDetail): String? {
+        val artist = detail.artists.firstOrNull()?.second.orEmpty()
+        val queries = listOf("${detail.name} $artist".trim(), detail.name).filter { it.isNotBlank() }.distinct()
+        for (query in queries) {
+            val songs = client.searchSongs(query, limit = 30).getOrNull()?.items.orEmpty()
+            val linked = songs.firstOrNull { song ->
+                song.mvId == detail.id && detail.artists.any { (artistId, _) -> artistId in song.artistIds }
+            } ?: songs.firstOrNull { it.mvId == detail.id }
+            if (linked != null) return linked.id.toString()
+        }
+        return null
+    }
 
     /** 歌曲→关联 MV id(菜单"看 MV"解析):0/null=无 MV */
     suspend fun getNeteaseSongMvId(songId: String): Long? {

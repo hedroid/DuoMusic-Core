@@ -2319,10 +2319,14 @@ internal class CrossfadeExoPlayerAdapter(
      * instead of fading in under the outgoing song — so the transition takes the normal
      * (non-crossfade) path.
      */
-    private fun isNextTrackVideo(): Boolean = watchVideoEnabled && playlist.getOrNull(getNextMediaItemIndex())?.isVideo() == true
+    private fun isNextTrackVideo(): Boolean = playlist.getOrNull(getNextMediaItemIndex())?.let {
+        (watchVideoEnabled || com.maxrave.domain.data.player.ExplicitVideoPlayback.includes(it.mediaId)) && it.isVideo()
+    } == true
 
     /** Same skip rule for the CURRENT track: a video should play out to its last frame instead of fading out under the incoming song. */
-    private fun isCurrentTrackVideo(): Boolean = watchVideoEnabled && currentMediaItem?.isVideo() == true
+    private fun isCurrentTrackVideo(): Boolean = currentMediaItem?.let {
+        (watchVideoEnabled || com.maxrave.domain.data.player.ExplicitVideoPlayback.includes(it.mediaId)) && it.isVideo()
+    } == true
 
     /** A live broadcast never reaches an end to fade out of, and its "remaining time" is only how far behind the live edge it is. */
     private fun isCurrentTrackLive(): Boolean = currentMediaItem?.mediaId?.let(LiveStreamRegistry::isLive) == true

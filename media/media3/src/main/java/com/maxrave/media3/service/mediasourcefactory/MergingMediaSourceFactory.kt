@@ -52,7 +52,8 @@ internal class MergingMediaSourceFactory(
             )
         }
         Logger.w("Merging Media Source", mediaItem.mediaMetadata.description.toString())
-        val getVideo = runBlocking(Dispatchers.IO) { dataStoreManager.watchVideoInsteadOfPlayingAudio.first() } == DataStoreManager.Values.TRUE
+        val getVideo = com.maxrave.domain.data.player.ExplicitVideoPlayback.includes(mediaItem.mediaId) ||
+            runBlocking(Dispatchers.IO) { dataStoreManager.watchVideoInsteadOfPlayingAudio.first() } == DataStoreManager.Values.TRUE
         Logger.w("Merging Media Source", getVideo.toString())
         // 网易 MV:单文件 mp4 自带音轨,绝不走双流合并——同一 mp4 当 video+audio 两个分支
         // 各拉一遍是纯浪费,且部分合并路径会因容器里只有一路而失真

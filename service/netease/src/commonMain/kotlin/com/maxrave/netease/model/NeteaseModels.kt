@@ -408,7 +408,7 @@ data class NeteaseCommentPage(
  */
 data class NeteaseCommentPageV2(
     val comments: List<NeteaseComment>,
-    val totalCount: Int,
+    val totalCount: Int?,
     val hasMore: Boolean,
     /** 下一页游标,服务端算好直接透传(最热 normalHot#N / 最新时间戳),null=没有更多 */
     val cursor: String?,

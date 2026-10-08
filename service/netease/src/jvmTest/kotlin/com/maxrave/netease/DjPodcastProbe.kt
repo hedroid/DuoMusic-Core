@@ -9,10 +9,20 @@ import kotlinx.serialization.json.booleanOrNull
  * (精选=djRadios?/榜单=toplist?/猜你喜欢=data?)与订阅列表路径
  * (/user/djradio/get/subed vs /djradio/get/subed)。输出 /tmp/dj_podcast_out.txt。
  * cookie 文件不存在时静默跳过。
+ *
+ * ⚠️ 含真实账号写操作:电台订阅切换(sub/unsub 双向可用,测后还原)之外,还有
+ * "节目喜欢端点验证"段——对真实节目无条件尝试多个喜欢写形状,无撤销无对账
+ * (2026-10-08 复审指出;写是否生效未验证)。cookie 文件在本机常态存在不能当
+ * 开关,普通 jvmTest/全量测试不得误触:启用需 `touch /tmp/dj_podcast_probe.enabled`,
+ * 跑完删除(与 MvSubProbe 同款门禁;不用环境变量——Gradle daemon 不透传新 shell env)。
  */
 class DjPodcastProbe {
     @Test
     fun probeDjPodcast() {
+        if (!File("/tmp/dj_podcast_probe.enabled").exists()) {
+            println("skip: touch /tmp/dj_podcast_probe.enabled to enable (real-account writes inside)")
+            return
+        }
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) {
             println("skip: /tmp/netease_cookies.json not found")
