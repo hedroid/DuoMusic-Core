@@ -1351,8 +1351,7 @@ internal class MediaServiceHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
-                // 网易 MV:红心=收藏 MV(mv/sub);写后重拉 subed 对账(取消方向 t=0 服务端
-                // 可能假成功,以回读为准,不做本地乐观翻转)
+                // 网易 MV:红心=收藏/取消收藏 MV;写后重拉 subed 对账,不做本地乐观翻转
                 if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
                     val mvid = id.removePrefix(NETEASE_MV_MEDIA_ID_PREFIX).toLongOrNull() ?: return@launch
                     val likedNow = _controlState.value.isLiked == true

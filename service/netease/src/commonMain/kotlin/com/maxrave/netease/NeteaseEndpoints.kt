@@ -1859,18 +1859,19 @@ suspend fun NeteaseClient.mvToplist(
         mvs to (body["hasMore"].nInt() == 1)
     }
 
-/** 收藏/取消收藏 MV(weapi 双端点)。与歌单收藏同坑:同一端点带 t=1/t=0 会被服务端
- *  回 400(t 参数畸形,playlist/subscribe 的 405 同源教训),换 /mv/sub + /mv/unsub 即通。 */
+/** 收藏/取消收藏 MV:分别走 /mv/sub 与 /mv/unsub,两者都要传 mvId 和 JSON 数组字符串 mvIds。
+ *  2026-10-08 实测:只传 mvId 的 /mv/unsub 回 HTTP 400;/mv/sub 带 t=0 虽回 200 却仍
+ *  收藏。补齐 mvIds 后 /mv/unsub 回 200,2.5s 后 sublist 与 detail.subed 均已取消。
+ *  调用侧仍须以服务端回读为准,避免异步写入延迟导致状态误判。 */
 suspend fun NeteaseClient.mvSub(
     mvid: Long,
     subscribe: Boolean,
 ): Result<Boolean> =
     runCatching {
-        // 参数名驼峰 mvId(探针实证:mvid 小写 400,mvId 200;2026-10-07)
         val body =
             callWeApi(
-                "/mv/sub",
-                linkedMapOf("mvId" to mvid, "t" to if (subscribe) 1 else 0),
+                if (subscribe) "/mv/sub" else "/mv/unsub",
+                linkedMapOf("mvId" to mvid, "mvIds" to "[\"$mvid\"]"),
             )
         body["code"].nInt() == 200
     }
