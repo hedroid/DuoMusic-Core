@@ -1848,9 +1848,12 @@ class JvmMediaPlayerHandlerImpl(
     private fun startEndlessRadio() {
         if (runBlocking { dataStoreManager.endlessQueue.first() } != TRUE) return
         Logger.w(TAG, "loadMore: Endless Queue")
+        // 混合队列尾曲可能是网易 MV(NETEASE_MV_ 前缀):MV 当种子会按 id 形状误路由到
+        // YT 电台分支必败(静默不续)。往前找最近的一首歌当种子;整队皆 MV 则不转电台
+        // (纯 MV 队列在 loadMore 入口已早退,不会走到这里)。
         val lastTrack =
             queueData.value.data.listTracks
-                .lastOrNull() ?: return
+                .lastOrNull { !it.videoId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) } ?: return
         val radioId = songRadioPlaylistId(lastTrack.videoId)
         if (radioId == queueData.value.data.playlistId) {
             Logger.w(TAG, "loadMore: Already in radio mode")
