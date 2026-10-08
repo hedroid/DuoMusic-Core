@@ -181,6 +181,13 @@ data class NeteaseCommentListPage(
     val totalCount: Int? = null,
 )
 
+/** 收藏的 MV 分页页:hasMore=还有下一页;totalCount=服务端收藏总数(头部计数用真总数) */
+data class NeteaseMvSublistPage(
+    val mvs: List<Track>,
+    val hasMore: Boolean,
+    val totalCount: Int,
+)
+
 /**
  * 网易云音源适配层:把 NeteaseClient 的 DTO "整形成 YTM 形状"的 domain 实体,实现统一
  * 契约 [MusicSourceProvider]。Cookie 持久化在 DataStoreManager,client 通过钩子读写。
@@ -1604,12 +1611,19 @@ class NeteaseRepositoryImpl(
     ): Result<Pair<List<Track>, Boolean>> =
         client.mvToplist(limit, offset).map { (mvs, hasMore) -> mvs.map { it.toMvTrack() } to hasMore }
 
-    /** 收藏的 MV 分页(mv/sublist,需登录):列表页用 */
+    /** 收藏的 MV 分页(mv/sublist,需登录):列表页用。totalCount=服务端收藏总数,
+     *  头部计数用它(已加载条数在翻页完成前小于总数,拿 size 当计数会缩水)。 */
     suspend fun getMvSublistPaged(
         limit: Int = 30,
         offset: Int = 0,
-    ): Result<Pair<List<Track>, Boolean>> =
-        client.mvSublist(limit, offset).map { it.mvs.map { mv -> mv.toMvTrack() } to it.hasMore }
+    ): Result<NeteaseMvSublistPage> =
+        client.mvSublist(limit, offset).map { sub ->
+            NeteaseMvSublistPage(
+                mvs = sub.mvs.map { mv -> mv.toMvTrack() },
+                hasMore = sub.hasMore,
+                totalCount = sub.count,
+            )
+        }
 
     /** 收藏的 MV 概要(库页行):总数+首条封面;null=拉取失败/未登录空集 */
     suspend fun getMvSublistSummary(): Pair<Int, String?>? =

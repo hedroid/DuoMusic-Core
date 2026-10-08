@@ -1842,7 +1842,7 @@ suspend fun NeteaseClient.mvSublist(
             )
         NeteaseMvSublist(
             mvs = body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList(),
-            hasMore = body["hasMore"].nInt() == 1,
+            hasMore = body["hasMore"].nBool() ?: false,
             count = body["count"].nInt() ?: 0,
         )
     }
@@ -1859,7 +1859,7 @@ suspend fun NeteaseClient.mvToplist(
                 linkedMapOf("limit" to limit, "offset" to offset),
             )
         val mvs = body.array("data")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList()
-        mvs to (body["hasMore"].nInt() == 1)
+        mvs to (body["hasMore"].nBool() ?: false)
     }
 
 /** 收藏/取消收藏 MV:分别走 /mv/sub 与 /mv/unsub,两者都要传 mvId 和 JSON 数组字符串 mvIds。
@@ -1982,3 +1982,10 @@ internal fun JsonObject.str(key: String): String? =
 internal fun JsonElement?.nLong(): Long? = (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.longOrNull
 
 internal fun JsonElement?.nInt(): Int? = (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.intOrNull
+
+/** 布尔字段两种形状都收:mv/sublist、mv/toplist 的 hasMore 实测回 JSON true/false,
+ *  部分老端点回 0/1;只按 int 解析会把 true 读成 null(恒 false,分页停首页)。 */
+internal fun JsonElement?.nBool(): Boolean? =
+    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.let { c ->
+        c.toBooleanStrictOrNull() ?: c.toIntOrNull()?.let { it != 0 }
+    }
