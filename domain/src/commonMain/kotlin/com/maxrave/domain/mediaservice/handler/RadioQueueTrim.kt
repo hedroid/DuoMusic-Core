@@ -1,5 +1,7 @@
 package com.maxrave.domain.mediaservice.handler
 
+import com.maxrave.common.NETEASE_RADIO_PLAYLIST_ID_PREFIX
+import com.maxrave.common.NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX
 import com.maxrave.domain.utils.isRadioQueueId
 
 /**
@@ -35,8 +37,8 @@ object RadioQueueTrim {
      * The type alone does not say so. Favorites, Downloaded, Most played, Monthly recap, Your top
      * tracks, the Analytics lists and a playlist's Shuffle are all queued as [PlaylistType.RADIO]
      * too, and every one of them is a finite list the user picked. What a real radio also has is a
-     * YouTube radio id it keeps extending from: `RD…`, minus `RDCLAK…`, which is a curated playlist
-     * with an end.
+     * Radio ids are `RD…` for YouTube or one of the Netease radio prefixes. `RDCLAK…`
+     * is a curated playlist with an end.
      */
     fun appliesTo(
         playlistType: PlaylistType?,
@@ -44,7 +46,9 @@ object RadioQueueTrim {
     ): Boolean =
         playlistType == PlaylistType.RADIO &&
             playlistId != null &&
-            playlistId.isRadioQueueId() &&
+            (playlistId.isRadioQueueId() ||
+                playlistId.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX) ||
+                playlistId.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX)) &&
             !playlistId.removePrefix("VL").startsWith("RDCLAK")
 
     /**

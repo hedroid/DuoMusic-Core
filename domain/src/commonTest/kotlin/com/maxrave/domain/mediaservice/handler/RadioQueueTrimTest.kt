@@ -53,6 +53,8 @@ class RadioQueueTrimTest {
         assertTrue(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "RDAMVMdQw4w9WgXcQ"))
         assertTrue(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "RDEMabc"))
         assertTrue(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "RDATabc"))
+        assertTrue(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "NETEASE_RADIO_12345"))
+        assertTrue(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "NETEASE_ARTIST_RADIO_6452_186016"))
         // Favorites, Downloaded, Most played, Monthly recap and the Analytics lists: RADIO, no id.
         assertFalse(RadioQueueTrim.appliesTo(PlaylistType.RADIO, null))
         // A playlist's Shuffle plays from the playlist's own id.
@@ -62,6 +64,8 @@ class RadioQueueTrimTest {
         assertFalse(RadioQueueTrim.appliesTo(PlaylistType.RADIO, "VLRDCLAK5uy_abc"))
         // Not a radio until Endless queue re-types it.
         assertFalse(RadioQueueTrim.appliesTo(PlaylistType.PLAYLIST, "RDAMVMabc"))
+        assertFalse(RadioQueueTrim.appliesTo(PlaylistType.PLAYLIST, "NETEASE_RADIO_12345"))
+        assertFalse(RadioQueueTrim.appliesTo(PlaylistType.PLAYLIST, "NETEASE_ARTIST_RADIO_6452_186016"))
         assertFalse(RadioQueueTrim.appliesTo(null, "RDAMVMabc"))
     }
 

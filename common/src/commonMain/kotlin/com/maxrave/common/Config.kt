@@ -667,6 +667,9 @@ const val NETEASE_FM_PLAYLIST_ID = "NETEASE_FM"
  */
 const val NETEASE_RADIO_PLAYLIST_ID_PREFIX = "NETEASE_RADIO_"
 
+/** 网易艺人电台：队列 ID 同时携带目标艺人和推荐种子歌曲 ID。 */
+const val NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX = "NETEASE_ARTIST_RADIO_"
+
 /** 网易单曲电台每批拉取条数(simiSong limit)；返回不足此数即服务端见底，电台收尾 */
 const val NETEASE_RADIO_BATCH_SIZE = 30
 

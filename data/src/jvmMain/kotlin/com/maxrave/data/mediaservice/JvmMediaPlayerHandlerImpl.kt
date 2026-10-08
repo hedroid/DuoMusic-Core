@@ -18,7 +18,9 @@ import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_PODCAST_RADIO_QUEUE_PREFIX
 import com.maxrave.common.NETEASE_RADIO_APPEND_BATCH
+import com.maxrave.common.NETEASE_RADIO_BATCH_SIZE
 import com.maxrave.common.NETEASE_RADIO_PLAYLIST_ID_PREFIX
+import com.maxrave.common.NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX
 import com.maxrave.common.SPONSOR_BLOCK_MIN_SEGMENT_SECONDS
 import com.maxrave.common.SPONSOR_BLOCK_SKIP_MARGIN_MS
 import com.maxrave.common.TITLE
@@ -27,6 +29,7 @@ import com.maxrave.data.db.Converters
 import com.maxrave.data.lastfm.LastfmScrobbler
 import com.maxrave.data.repository.NeteasePlayability
 import com.maxrave.data.repository.NeteaseRepositoryImpl
+import com.maxrave.data.repository.NeteaseArtistRadio
 import com.maxrave.data.repository.SearchRepositoryImpl
 import com.maxrave.data.repository.toResultSong
 import com.maxrave.data.mediaservice.mac.MacOSMediaIntegration
@@ -1592,6 +1595,10 @@ class JvmMediaPlayerHandlerImpl(
             getNeteaseFmBatch()
             return
         }
+        if (playlistId.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX)) {
+            getNeteaseArtistRadioBatch()
+            return
+        }
         // 网易单曲电台(NETEASE_RADIO_<songId>):按 continuation 里的 item offset 续批 simiSong。
         if (playlistId.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX)) {
             getNeteaseRadioBatch()
@@ -2046,11 +2053,46 @@ class JvmMediaPlayerHandlerImpl(
         }
     }
 
-    /**
-     * 网易单曲电台续批：取 continuation 里的 item offset 拉一批 simiSong、按现有队列去重后
-     * 追加。返回不足一整批、或整批撞重复，都算服务端见底：清掉 continuation 收尾（电台播完
-     * 即止，不像 YT 电台那样再滑到 RDAMVM 关联续播——那边对数字 ID 同样无解）。
-     */
+    /** 网易艺人电台每页各取艺人歌曲与相似歌曲，再交错追加。 */
+    private fun getNeteaseArtistRadioBatch() {
+        if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) return
+        val queueId = queueData.value.data.playlistId ?: return
+        val (artistId, seedId) = NeteaseArtistRadio.idsFromQueueId(queueId) ?: return
+        val initialToken = queueData.value.data.continuation
+        if (initialToken == null) {
+            startEndlessRadio()
+            return
+        }
+        coroutineScope.launch {
+            _queueData.update { it.copy(queueState = QueueData.StateSource.STATE_INITIALIZING) }
+            var token: String? = initialToken
+            var fresh: List<Track> = emptyList()
+            var failed = false
+            val existingIds = queueData.value.data.listTracks.map { it.videoId }.toHashSet()
+            var attempts = 0
+            while (token != null && fresh.isEmpty() && attempts++ < 3) {
+                val cursor = NeteaseArtistRadio.Cursor.parse(token)
+                if (cursor == null) { failed = true; break }
+                val previous = token
+                val page = NeteaseArtistRadio.nextPage(artistId, seedId, cursor, neteaseRepository)
+                if (page == null) { failed = true; break }
+                token = page.continuation
+                fresh = page.tracks.filter { existingIds.add(it.videoId) }
+                if (token == previous) break
+            }
+            if (queueData.value.data.playlistId != queueId) return@launch
+            if (fresh.isNotEmpty()) loadMoreCatalog(fresh.toCollection(arrayListOf()))
+            _queueData.update {
+                it.copy(
+                    queueState = QueueData.StateSource.STATE_INITIALIZED,
+                    data = it.data.copy(continuation = if (failed) initialToken else token),
+                )
+            }
+            if (!failed && token == null && fresh.isEmpty()) startEndlessRadio()
+        }
+    }
+
+    /** 网易单曲电台按相似歌 offset 续批；无尽模式见底时改用队尾歌曲重新播种。 */
     private fun getNeteaseRadioBatch() {
         if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) return
         val songId =
@@ -2082,11 +2124,13 @@ class JvmMediaPlayerHandlerImpl(
                 return@launch
             }
             var batch: List<Track> = emptyList()
+            // 原生电台按首批规模续页；普通队列开启无尽后仍只追加少量歌曲。
+            val batchSize = if (endlessRestore == null) NETEASE_RADIO_BATCH_SIZE else NETEASE_RADIO_APPEND_BATCH
             // SERVICE_SCOPE 是 Dispatchers.Main,getSongRadio 是裸 suspend,必须自己切 IO
             withContext(Dispatchers.IO) {
                 batch =
                     repository
-                        .getSongRadio(songId, limit = NETEASE_RADIO_APPEND_BATCH, offset = offset)
+                        .getSongRadio(songId, limit = batchSize, offset = offset)
                         ?.songs
                         ?.map { it.toTrack() }
                         .orEmpty()
@@ -2101,7 +2145,7 @@ class JvmMediaPlayerHandlerImpl(
                         data =
                             it.data.copy(
                                 continuation =
-                                    if (batch.size >= NETEASE_RADIO_APPEND_BATCH) {
+                                    if (batch.size >= batchSize) {
                                         (offset + batch.size).toString()
                                     } else {
                                         null
@@ -3247,6 +3291,8 @@ class JvmMediaPlayerHandlerImpl(
             // 不依赖 endlessQueue 开关,凭哨兵 playlistId 放行。
             if ((list.size > 3 ||
                     queueData.value.data.playlistId == NETEASE_FM_PLAYLIST_ID ||
+                    queueData.value.data.playlistId?.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX) == true ||
+                    queueData.value.data.playlistId?.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX) == true ||
                     runBlocking { dataStoreManager.endlessQueue.first() == TRUE }) &&
                 list.size - player.currentMediaItemIndex < 3 &&
                 list.size - player.currentMediaItemIndex >= 0 &&

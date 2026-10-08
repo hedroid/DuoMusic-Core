@@ -679,11 +679,13 @@ internal class SongRepositoryImpl(
             if (neteaseSeedId != null) {
                 runCatching {
                     val seed = localDataSource.getSong(neteaseSeedId)?.toTrack()
-                    val similar =
+                    val radioPage =
                         neteaseRepository
                             .getSongRadio(neteaseSeedId, limit = NETEASE_RADIO_BATCH_SIZE, offset = 0)
                             ?.songs
                             .orEmpty()
+                    val similar =
+                        radioPage
                             .filter { it.videoId != neteaseSeedId }
                             .map { it.toTrack() }
                     if (seed == null && similar.isEmpty()) {
@@ -694,7 +696,7 @@ internal class SongRepositoryImpl(
                                 Pair(
                                     listOfNotNull(seed) + similar,
                                     // 首批不足一个整批即已见底,不再挂 continuation
-                                    if (similar.size >= NETEASE_RADIO_BATCH_SIZE) similar.size.toString() else null,
+                                    if (radioPage.size >= NETEASE_RADIO_BATCH_SIZE) radioPage.size.toString() else null,
                                 ),
                             ),
                         )
