@@ -3,7 +3,7 @@ package com.maxrave.netease
 import java.io.File
 import kotlin.test.Test
 
-/** 清理实测期间上传到用户真实云盘的测试文件(还原 242 首) */
+/** 清理实测期间上传到用户真实云盘的测试文件(按文件名匹配——匹配后 songId 会变,按 id 删不可靠) */
 class CloudCleanupProbe {
     @Test
     fun cleanup() {
@@ -17,17 +17,27 @@ class CloudCleanupProbe {
                     k to (v as kotlinx.serialization.json.JsonPrimitive).content
                 }
             val client = NeteaseClient(cookieProvider = { cookies })
-            val testIds =
+            val testNames =
                 setOf(
-                    3445922611L, // 25-梁咏琪.mp3(探针)
-                    3445952627L, // A Sad Me(sadtest/app)
-                    406387978L, // bass-test.flac
-                    471151469L, // bass 19:23 轮(若单独成条)
-                    3445967170L, // final-test.mp3 (Auf)
+                    "upload_test.mp3", "25-梁咏琪.mp3", "sadtest-upload.mp3",
+                    "bass-test.flac", "final-test.mp3",
+                    "batch1.flac", "batch2.flac", "batch3.flac", "batch4.flac",
                 )
-            for (id in testIds) {
-                val ok = client.deleteCloudDiskSong(id).getOrDefault(false)
-                sb.appendLine("del $id -> $ok")
+            // 拉全量(分页),按 fileName 匹配删除
+            val all = mutableListOf<NeteaseCloudFile>()
+            var offset = 0
+            while (true) {
+                val page = client.cloudDiskFiles(limit = 200, offset = offset).getOrNull() ?: break
+                all += page.files
+                if (page.files.isEmpty() || offset + page.files.size >= page.totalCount) break
+                offset += page.files.size
+            }
+            sb.appendLine("scanned=${all.size}")
+            for (f in all) {
+                if (f.fileName in testNames) {
+                    val ok = client.deleteCloudDiskSong(f.songId).getOrDefault(false)
+                    sb.appendLine("del ${f.songId} ${f.fileName} -> $ok")
+                }
             }
             kotlinx.coroutines.delay(2500)
             client.cloudDiskFiles(limit = 5).fold(
@@ -42,3 +52,5 @@ class CloudCleanupProbe {
         println(sb)
     }
 }
+
+private typealias NeteaseCloudFile = com.maxrave.netease.model.NeteaseCloudFile

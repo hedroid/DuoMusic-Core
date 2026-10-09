@@ -13,6 +13,7 @@ import com.maxrave.netease.model.NeteaseQrStatus
 import com.maxrave.ktorext.getEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.onUpload
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
@@ -56,6 +57,8 @@ class NeteaseClient(
                 requestTimeoutMillis = 30_000
                 connectTimeoutMillis = 15_000
             }
+            // 上传进度回调(onUpload 扩展)依赖该插件;对未挂监听的请求零开销
+            install(io.ktor.client.plugins.BodyProgress)
         }
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -326,6 +329,8 @@ class NeteaseClient(
         contentType: String,
         contentLength: Long,
         body: io.ktor.utils.io.ByteReadChannel,
+        /** 上传字节进度(实发字节,总长);频繁回调,调用方自行节流 */
+        onUpload: (suspend (bytesSent: Long, total: Long) -> Unit)? = null,
     ): Result<Unit> =
         runCatching {
             val encodedKey = objectKey.replace("/", "%2F")
@@ -338,6 +343,11 @@ class NeteaseClient(
                     header("Content-MD5", contentMd5)
                     header(HttpHeaders.ContentType, contentType)
                     header(HttpHeaders.ContentLength, contentLength.toString())
+                    if (onUpload != null) {
+                        onUpload { sent, total ->
+                            onUpload(sent, total ?: contentLength)
+                        }
+                    }
                     setBody(body)
                 }
             val text = response.bodyAsText()

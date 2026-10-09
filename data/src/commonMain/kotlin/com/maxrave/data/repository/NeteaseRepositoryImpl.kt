@@ -1099,9 +1099,10 @@ class NeteaseRepositoryImpl(
         artist: String,
         contentType: String,
         openBody: com.maxrave.netease.model.CloudUploadBodyFactory,
+        onUpload: (suspend (bytesSent: Long, total: Long) -> Unit)? = null,
     ): Result<Long> =
         withContext(Dispatchers.IO) {
-            client.uploadToCloudDisk(fileName, ext, sizeBytes, md5, song, album, artist, contentType, openBody)
+            client.uploadToCloudDisk(fileName, ext, sizeBytes, md5, song, album, artist, contentType, openBody, onUpload)
         }
 
     /** 删除云盘歌曲(/cloud/del,不可逆;UI 层负责强确认) */

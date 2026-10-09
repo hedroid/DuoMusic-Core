@@ -1883,6 +1883,8 @@ suspend fun NeteaseClient.uploadToCloudDisk(
     artist: String,
     contentType: String,
     openBody: com.maxrave.netease.model.CloudUploadBodyFactory,
+    /** 上传字节进度(秒传不触发——对象已在,无网络传输) */
+    onUpload: (suspend (bytesSent: Long, total: Long) -> Unit)? = null,
 ): Result<Long> =
     runCatching {
         val (hexSongId, needUpload) = cloudUploadCheck(md5, sizeBytes).getOrThrow()
@@ -1901,15 +1903,26 @@ suspend fun NeteaseClient.uploadToCloudDisk(
                 contentType = contentType,
                 contentLength = sizeBytes,
                 body = openBody(),
+                onUpload = onUpload,
             ).getOrThrow()
         }
-        val publishSongId = cloudUploadInfo(md5, hexSongId, fileName, song, album, artist, token.resourceId).getOrThrow()
+        // info/v2 404(uploadStatus:9)=服务端刚收完 nos 对象还在落元数据的悬挂态
+        // (2026-10-09 实测:put 完成后毫秒级发 info 必 404,几分钟后再发即成功)——
+        // 与 pub 400(转码未完成)同族,退避重试三次
+        var publishSongId: String? = null
+        for (attempt in 0 until 3) {
+            cloudUploadInfo(md5, hexSongId, fileName, song, album, artist, token.resourceId).fold(
+                onSuccess = { publishSongId = it },
+                onFailure = { if (attempt < 2) kotlinx.coroutines.delay(3000L * (attempt + 1)) },
+            )
+            if (publishSongId != null) break
+        }
         // pub 400=服务端转码未完成的临时拒绝(2026-10-09 实测:全新文件 info 后立即
         // pub 必 400,十几秒后重发 200)——退避重试三次,仍失败才报错
         var published = false
         var lastError: Throwable? = null
         for (attempt in 0 until 3) {
-            cloudPublish(publishSongId).fold(
+            cloudPublish(publishSongId ?: error("cloud upload info failed")).fold(
                 onSuccess = { published = true },
                 onFailure = { e ->
                     lastError = e
@@ -1919,7 +1932,7 @@ suspend fun NeteaseClient.uploadToCloudDisk(
             if (published) break
         }
         if (!published) throw lastError ?: IllegalStateException("cloud publish failed")
-        publishSongId.toLongOrNull() ?: 0L
+        return@runCatching publishSongId!!.toLongOrNull() ?: 0L
     }
 
 
