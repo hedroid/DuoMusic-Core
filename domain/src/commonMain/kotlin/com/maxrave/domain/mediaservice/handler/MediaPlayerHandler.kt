@@ -11,6 +11,7 @@ import com.maxrave.domain.data.player.GenericCommandButton
 import com.maxrave.domain.data.player.GenericMediaItem
 import com.maxrave.domain.data.player.PlayerError
 import com.maxrave.domain.mediaservice.player.MediaPlayerInterface
+import com.maxrave.domain.utils.isEndlessRadioQueueId
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -304,6 +305,10 @@ data class QueueData(
         val playlistName: String? = null,
         val playlistType: PlaylistType? = null,
         val continuation: String? = null,
+        // 普通队列(歌单/专辑等)被无尽钩子转成电台后置 true：这种队列的电台身份是
+        // 开关赋予的，UI 无尽开关保持可关(关=裁回原队列)；原生电台(见下)则锁定为开。
+        // 不持久化——重启后 restore 快照本就丢失，转换态随之失效，行为与显示一致。
+        val radioConvertedFromQueue: Boolean = false,
     ) {
         /**
          * 播客队列唯一判定:只认显式前缀。队列身份三键持久化(fd62b5a)后恢复路径
@@ -314,6 +319,14 @@ data class QueueData(
          */
         val isNeteasePodcastQueue: Boolean
             get() = playlistId?.startsWith(NETEASE_PODCAST_QUEUE_PREFIX) == true
+
+        /**
+         * 原生电台形态(无尽不依赖开关)：YT 电台/FM/网易电台哨兵，且不是普通队列
+         * 转换来的。UI 的无尽开关对它锁定为开(点击提示无法关闭)；core 的无尽
+         * 钩子(转电台/换种子续链)对它豁免 endlessQueue 开关门。
+         */
+        val isEndlessRadioQueue: Boolean
+            get() = !radioConvertedFromQueue && playlistId?.isEndlessRadioQueueId() == true
     }
 
     enum class StateSource {

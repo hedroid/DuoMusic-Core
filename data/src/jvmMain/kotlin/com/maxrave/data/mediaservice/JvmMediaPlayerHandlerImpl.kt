@@ -82,6 +82,7 @@ import com.maxrave.domain.utils.FilterState
 import com.maxrave.domain.utils.MusicVideoType
 import com.maxrave.domain.utils.Resource
 import com.maxrave.domain.utils.connectArtists
+import com.maxrave.domain.utils.isEndlessRadioQueueId
 import com.maxrave.domain.utils.toArrayListTrack
 import com.maxrave.domain.utils.toListName
 import com.maxrave.domain.utils.toSongEntity
@@ -1846,7 +1847,13 @@ class JvmMediaPlayerHandlerImpl(
      * continuation 当偏移，首批判 "0"）。种子与当前 playlistId 相同视为已在该电台模式，早退。
      */
     private fun startEndlessRadio() {
-        if (runBlocking { dataStoreManager.endlessQueue.first() } != TRUE) return
+        // 原生电台(电台形态且非普通队列转换来的)语义即无尽，豁免 endlessQueue 开关；
+        // 普通队列(歌单/专辑/mix 分区)是否转电台仍由开关决定(对齐 YTM autoplay)。
+        if (runBlocking { dataStoreManager.endlessQueue.first() } != TRUE &&
+            !queueData.value.data.isEndlessRadioQueue
+        ) {
+            return
+        }
         Logger.w(TAG, "loadMore: Endless Queue")
         // 混合队列尾曲可能是网易 MV(NETEASE_MV_ 前缀):MV 当种子会按 id 形状误路由到
         // YT 电台分支必败(静默不续)。往前找最近的一首歌当种子;整队皆 MV 则不转电台
@@ -1870,6 +1877,11 @@ class JvmMediaPlayerHandlerImpl(
                     originalTrackIds = queueData.value.data.listTracks.map { it.videoId },
                 )
         }
+        // 电台身份标记:普通队列转来的标 converted(UI 开关保持可关/可恢复)，原生电台
+        // 换种子续链保持原生(锁定无尽)。已是 converted 的换种子不得丢标记。
+        val radioConverted =
+            queueData.value.data.radioConvertedFromQueue ||
+                queueData.value.data.playlistId?.isEndlessRadioQueueId() != true
         if (radioId.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX)) {
             _queueData.update {
                 it.copy(
@@ -1881,6 +1893,7 @@ class JvmMediaPlayerHandlerImpl(
                             // 与 YT 分支同款语义:跑过用户选的列表后,这队列就由电台续批
                             // 无限增长——标 RADIO 让历史裁剪(RadioQueueTrim)也覆盖网易。
                             playlistType = PlaylistType.RADIO,
+                            radioConvertedFromQueue = radioConverted,
                         ),
                 )
             }
@@ -1898,6 +1911,7 @@ class JvmMediaPlayerHandlerImpl(
                             // Saying so keeps the type honest and lets the history trim apply, while
                             // the album snapshot for the crossfade rule was already taken at load.
                             playlistType = PlaylistType.RADIO,
+                            radioConvertedFromQueue = radioConverted,
                         ),
                 )
             }
@@ -1929,6 +1943,7 @@ class JvmMediaPlayerHandlerImpl(
                         playlistType = snap.playlistType,
                         continuation = snap.continuation,
                         listTracks = kept.toCollection(ArrayList()),
+                        radioConvertedFromQueue = false,
                     ),
             )
         }
@@ -1948,7 +1963,13 @@ class JvmMediaPlayerHandlerImpl(
      * 与 FM 批次的重试上限同理，防"同一批相似歌反复拉"的死循环。
      */
     private fun reseedNeteaseRadioIfEndless() {
-        if (runBlocking { dataStoreManager.endlessQueue.first() } != TRUE) return
+        // 原生电台(菜单"收听电台"/艺人电台/相似歌电台)换种子续链不依赖开关——电台语义
+        // 即无尽;普通队列转来的电台(endlessRestore 快照还在)尊重开关,关了就到尾收摊。
+        if (runBlocking { dataStoreManager.endlessQueue.first() } != TRUE &&
+            queueData.value.data.radioConvertedFromQueue
+        ) {
+            return
+        }
         val lastTrack =
             queueData.value.data.listTracks
                 .lastOrNull() ?: return
@@ -3328,12 +3349,10 @@ class JvmMediaPlayerHandlerImpl(
             nowPlayingState.value.songEntity?.let { updateDiscordRpc(it) }
         }
         queueData.value.data.listTracks.let { list ->
-            // 网易私人FM 一批只有 3 首,天然过不了 list.size > 3 的门;FM 语义即无限电台,
-            // 不依赖 endlessQueue 开关,凭哨兵 playlistId 放行。
+            // 网易私人FM 一批只有 3 首,天然过不了 list.size > 3 的门;电台形态(FM/网易电台
+            // 哨兵/YT 电台前缀)语义即无限,不依赖 endlessQueue 开关,凭 playlistId 放行。
             if ((list.size > 3 ||
-                    queueData.value.data.playlistId == NETEASE_FM_PLAYLIST_ID ||
-                    queueData.value.data.playlistId?.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX) == true ||
-                    queueData.value.data.playlistId?.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX) == true ||
+                    queueData.value.data.playlistId?.isEndlessRadioQueueId() == true ||
                     runBlocking { dataStoreManager.endlessQueue.first() == TRUE }) &&
                 list.size - player.currentMediaItemIndex < 3 &&
                 list.size - player.currentMediaItemIndex >= 0 &&
