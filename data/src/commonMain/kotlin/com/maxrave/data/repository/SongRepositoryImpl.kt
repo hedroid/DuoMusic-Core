@@ -472,8 +472,8 @@ internal class SongRepositoryImpl(
                             .onSuccess { browse ->
                                 val nextToken =
                                     browse.nextOffset?.let { "$NETEASE_CLOUD_DISK_PAGE_PREFIX$it" }
-                                Logger.d(TAG, "netease cloud page: offset=$offset got=${browse.songs.size} next=$nextToken")
-                                emit(Pair(ArrayList(browse.songs.map { it.toTrackPlaylist() }), nextToken))
+                                Logger.d(TAG, "netease cloud page: offset=$offset got=${browse.tracks.size} next=$nextToken")
+                                emit(Pair(ArrayList(browse.tracks), nextToken))
                             }.onFailure {
                                 Logger.e(TAG, "netease cloud page failed: ${it.message}")
                                 emit(Pair(null, null))

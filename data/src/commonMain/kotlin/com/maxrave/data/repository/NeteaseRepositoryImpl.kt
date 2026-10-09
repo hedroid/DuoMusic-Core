@@ -1076,7 +1076,7 @@ class NeteaseRepositoryImpl(
                     offset + page.files.size
                 }
             NeteaseCloudDiskBrowse(
-                songs = songs,
+                tracks = songs.map { it.toTrackPlaylist() },
                 nextOffset = nextOffset,
                 totalCount = page.totalCount,
                 usedSizeBytes = page.usedSizeBytes,
@@ -2487,9 +2487,10 @@ private fun List<NeteaseSong>.toSongHomeItem(title: String): HomeItem =
 private fun String?.sanitizeCardSubtitle(): String? =
     this?.trim()?.takeIf { it.isNotEmpty() && !it.all(Char::isDigit) }
 
-/** 云盘详情页数据(首页/续拉同形):曲目+下页游标(null=到底)+容量(头部展示用) */
+/** 云盘详情页数据(首页/续拉同形):曲目+下页游标(null=到底)+容量(头部展示用)。
+ *  tracks 已转 browse.album.Track(toTrackPlaylist 为模块 internal,VM/续拉两侧直接消费) */
 data class NeteaseCloudDiskBrowse(
-    val songs: List<NeteaseSong>,
+    val tracks: List<Track>,
     val nextOffset: Int?,
     val totalCount: Int,
     val usedSizeBytes: Long?,
