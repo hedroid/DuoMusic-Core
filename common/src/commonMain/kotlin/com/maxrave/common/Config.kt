@@ -662,6 +662,12 @@ const val TITLE = "TITLE"
 const val NETEASE_FM_PLAYLIST_ID = "NETEASE_FM"
 
 /**
+ * 网易红心电台队列名：与私人FM同挂 [NETEASE_FM_PLAYLIST_ID] 哨兵，靠本名字区分
+ * （起播写入 playlistName，随队列身份三键持久化；无尽锁定 toast 的文案分流也靠它）。
+ */
+const val NETEASE_HEART_RADIO_QUEUE_NAME = "红心电台"
+
+/**
  * 网易单曲电台 队列哨兵前缀：`NETEASE_RADIO_<songId>`。loadMore 见此前缀即按 continuation
  * 里的 item offset 拉下一批 simiSong 相似歌续批。YT 电台沿用 RDAMVM 前缀，两者判等互不误伤。
  */

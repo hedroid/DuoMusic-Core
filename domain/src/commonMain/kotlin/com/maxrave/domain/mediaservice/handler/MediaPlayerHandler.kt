@@ -1,5 +1,8 @@
 package com.maxrave.domain.mediaservice.handler
 
+import com.maxrave.common.NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX
+import com.maxrave.common.NETEASE_FM_PLAYLIST_ID
+import com.maxrave.common.NETEASE_HEART_RADIO_QUEUE_NAME
 import com.maxrave.common.NETEASE_PODCAST_QUEUE_PREFIX
 import com.maxrave.domain.data.entities.NewFormatEntity
 import com.maxrave.domain.data.entities.SongEntity
@@ -294,6 +297,9 @@ data class SleepTimerState(
     val timeRemaining: Int,
 )
 
+/** 原生电台锁定提示的分流种类，详见 [QueueData.Data.endlessRadioLockKind]。 */
+enum class EndlessRadioLockKind { FM, HEART_RADIO, ARTIST_RADIO, RADIO }
+
 data class QueueData(
     val queueState: StateSource = StateSource.STATE_CREATED,
     val data: Data = Data(),
@@ -326,7 +332,31 @@ data class QueueData(
          * 钩子(转电台/换种子续链)对它豁免 endlessQueue 开关门。
          */
         val isEndlessRadioQueue: Boolean
-            get() = !radioConvertedFromQueue && playlistId?.isEndlessRadioQueueId() == true
+            get() = endlessRadioLockKind != null
+
+        /**
+         * 锁定 toast 的文案分流(用户定案句式"XX不能关闭无尽队列")：私人FM/红心电台/
+         * 艺人电台各自点名，其余电台形态(单曲电台/混音等)统一 [EndlessRadioLockKind.RADIO]。
+         * 红心电台与私人FM同挂 FM 哨兵，靠队列名区分；艺人电台=网易艺人哨兵或 YT 的
+         * RDAT 前缀(PlaylistId.kt 口径)。非原生电台(含普通队列转来的)返回 null=不锁定。
+         */
+        val endlessRadioLockKind: EndlessRadioLockKind?
+            get() {
+                if (radioConvertedFromQueue) return null
+                val id = playlistId ?: return null
+                return when {
+                    id == NETEASE_FM_PLAYLIST_ID ->
+                        if (playlistName == NETEASE_HEART_RADIO_QUEUE_NAME) {
+                            EndlessRadioLockKind.HEART_RADIO
+                        } else {
+                            EndlessRadioLockKind.FM
+                        }
+                    id.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX) ||
+                        id.startsWith("RDAT") -> EndlessRadioLockKind.ARTIST_RADIO
+                    id.isEndlessRadioQueueId() -> EndlessRadioLockKind.RADIO
+                    else -> null
+                }
+            }
     }
 
     enum class StateSource {
