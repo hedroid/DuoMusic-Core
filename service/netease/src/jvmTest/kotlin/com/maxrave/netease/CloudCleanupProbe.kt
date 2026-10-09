@@ -22,6 +22,10 @@ class CloudCleanupProbe {
                     "upload_test.mp3", "25-梁咏琪.mp3", "sadtest-upload.mp3",
                     "bass-test.flac", "final-test.mp3",
                     "batch1.flac", "batch2.flac", "batch3.flac", "batch4.flac", "delid-test.mp3",
+                    // 2026-10-09 行内上传队列实测(含改字节合成文件)
+                    "测试上传-A.mp3", "测试上传-B.mp3",
+                    "A Sad Me In Your Eyes-昨夜派对（L.N Party）.mp3",
+                    "我是真的爱上你_-_王杰.flac", "爱情讯息_-_yihuik苡慧.flac",
                 )
             // 拉全量(分页),按 fileName 匹配删除
             val all = mutableListOf<NeteaseCloudFile>()
