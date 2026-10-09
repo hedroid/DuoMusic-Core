@@ -113,7 +113,9 @@ fun Track.toSongEntity(): SongEntity {
         isExplicit = this.isExplicit,
         likeStatus = this.likeStatus ?: "",
         thumbnails =
-            this.thumbnails?.last()?.url?.let {
+            // 云盘私人文件无封面:toThumbnails() 返回空列表(非 null),.last() 对空表
+            // 抛 NoSuchElementException(开三点菜单即崩)——lastOrNull 兜底
+            this.thumbnails?.lastOrNull()?.url?.let {
                 if (it.contains("w120")) {
                     return@let Regex("([wh])120").replace(it, "$1544")
                 } else if (it.contains("sddefault")) {

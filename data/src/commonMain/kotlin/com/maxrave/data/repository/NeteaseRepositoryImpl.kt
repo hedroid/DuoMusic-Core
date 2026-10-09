@@ -1076,7 +1076,26 @@ class NeteaseRepositoryImpl(
                     offset + page.files.size
                 }
             NeteaseCloudDiskBrowse(
-                tracks = songs.map { it.toTrackPlaylist() },
+                // 导航 id 规范化(2026-10-09 探针实证):云盘 simpleSong 的 ar/al 元数据
+                // 三种形状——①完整库元数据(阿爸:ar id=53568434/al id=149084331);
+                // ②匹配但 id=0(大量:ar=[0:"周杰伦"] al=[0:"跨时代"],名字真实无可导航
+                // id);③未匹配(熊猫人/千山万水:ar/al 整个缺席,dt=0,走文件名兜底)。
+                // id 无效(≤0)一律剥成 null——UI 侧以"无有效 id"隐藏对应导航行,防点后
+                // 跳空 id;行副标题只读名字,显示不受影响。私人文件判定(③)=艺人列表
+                // 为空,曲库功能(分享/点赞/电台等)对其关门。
+                tracks =
+                    songs.map { song ->
+                        song.toTrackPlaylist().let { t ->
+                            val albumValid = (t.album?.id?.toLongOrNull() ?: 0L) > 0L
+                            t.copy(
+                                artists =
+                                    t.artists?.map { a ->
+                                        if ((a.id?.toLongOrNull() ?: 0L) > 0L) a else a.copy(id = null)
+                                    } ?: emptyList(),
+                                album = if (albumValid) t.album else null,
+                            )
+                        }
+                    },
                 nextOffset = nextOffset,
                 totalCount = page.totalCount,
                 usedSizeBytes = page.usedSizeBytes,

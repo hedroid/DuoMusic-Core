@@ -461,8 +461,10 @@ internal class SongRepositoryImpl(
                             }
                     }
                 } else if (continuation.startsWith(NETEASE_CLOUD_DISK_PAGE_PREFIX)) {
-                    // 云盘滚动分页:令牌 = NETEASE_CLOUD_PAGE_{offset},/v1/cloud/get 续一页;
-                    // 失败按分页结束(同上,不重试)
+                    // 云盘滚动分页:令牌 = NETEASE_CLOUD_PAGE_{offset},/v1/cloud/get 续一页。
+                    // 失败≠到底:回显原令牌+空曲目——页面侧据 first==null && second!=null
+                    // 保留令牌回 IDLE(滚回近底可重试);队列侧 loadMore 只看 first==null,
+                    // 仍按到底处理,行为不变。令牌畸形的 offset==null 才是真"结束"。
                     val offset = continuation.removePrefix(NETEASE_CLOUD_DISK_PAGE_PREFIX).toIntOrNull()
                     if (offset == null) {
                         emit(Pair(null, null))
@@ -476,7 +478,7 @@ internal class SongRepositoryImpl(
                                 emit(Pair(ArrayList(browse.tracks), nextToken))
                             }.onFailure {
                                 Logger.e(TAG, "netease cloud page failed: ${it.message}")
-                                emit(Pair(null, null))
+                                emit(Pair(null, continuation))
                             }
                     }
                 } else if (!fromPlaylist) {
