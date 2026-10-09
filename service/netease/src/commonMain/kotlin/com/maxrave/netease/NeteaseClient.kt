@@ -341,6 +341,10 @@ class NeteaseClient(
                     setBody(body)
                 }
             val text = response.bodyAsText()
+            com.maxrave.logger.Logger.w(
+                "CloudUpload",
+                "nos put ${response.status.value} expect=${contentLength}B resp=${text.take(160)}",
+            )
             check(response.status.value in 200..299) {
                 "nos put ${response.status.value}: ${text.take(200)}"
             }

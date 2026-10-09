@@ -1717,6 +1717,11 @@ suspend fun NeteaseClient.cloudDiskFiles(
                     "offset" to offset,
                 ),
             )
+        // 业务码必须校验(2026-10-09 实测:云盘刚发布文件的窗口期该端点回 code=500
+        // "服务器发生错误",body 无 data/count——不拦会解析成"空云盘"覆盖上层列表)
+        check(body.str("code") == "200" || body["code"].nInt() == 200) {
+            "v1/cloud/get rejected: code=${body["code"]} ${body.str("message").orEmpty()}"
+        }
         NeteaseCloudDiskPage(
             files =
                 body.array("data")?.mapNotNull { element ->
@@ -1829,15 +1834,27 @@ suspend fun NeteaseClient.cloudUploadInfo(
                     "resourceId" to resourceId,
                 ),
             )
+        // W 级留痕:发布"四步全 200 但列表不出现"的静默失败只能靠这里排查
+        com.maxrave.logger.Logger.w(
+            "CloudUpload",
+            "info/v2 code=${body["code"]} resourceId=$resourceId publishSongId=${body.str("songId")} " +
+                "exists=${body.str("exists")} waitTime=${body.str("waitTime")}",
+        )
         body.str("songId")?.takeIf { it.isNotEmpty() }
             ?: error("info/v2 missing songId: code=${body["code"]}")
     }
 
-/** 云盘发布(weapi /cloud/pub/v2):songid 用 info/v2 响应的数字 id */
+/** 云盘发布(weapi /cloud/pub/v2):songid 用 info/v2 响应的数字 id。
+ *  code=201=该文件已在云盘(重复上传的幂等应答),与 200 同为成功(实测)。 */
 suspend fun NeteaseClient.cloudPublish(songId: String): Result<Unit> =
     runCatching {
         val body = callWeApi("/cloud/pub/v2", mapOf("songid" to songId))
-        check(body["code"].nInt() == 200 || body.str("code") == "200") {
+        com.maxrave.logger.Logger.w(
+            "CloudUpload",
+            "pub/v2 code=${body["code"]} msg=${body.str("message")} keys=${body.keys}",
+        )
+        val code = body["code"].nInt() ?: body.str("code")?.toIntOrNull()
+        check(code == 200 || code == 201) {
             "pub/v2 rejected: ${body["code"]} ${body.str("message").orEmpty()}"
         }
     }
@@ -1869,10 +1886,11 @@ suspend fun NeteaseClient.uploadToCloudDisk(
 ): Result<Long> =
     runCatching {
         val (hexSongId, needUpload) = cloudUploadCheck(md5, sizeBytes).getOrThrow()
-        var resourceId = 0L
+        // alloc 必须无条件执行(2026-10-09 实测):秒传路径(needUpload=false)若跳过 alloc,
+        // info/v2 会带 resourceId=0——服务端收 200 但发布延迟生效甚至不生效(两轮实测
+        // 行为不一致,均属不可靠);无条件 alloc 后 info 带真实 resourceId,两种路径都即刻进列表
+        val token = nosTokenAlloc(md5, fileName, ext).getOrThrow()
         if (needUpload) {
-            val token = nosTokenAlloc(md5, fileName, ext).getOrThrow()
-            resourceId = token.resourceId
             val node = nosUploadNode(CLOUD_UPLOAD_BUCKET).getOrThrow()
             nosPutObject(
                 uploadNode = node,
@@ -1885,8 +1903,22 @@ suspend fun NeteaseClient.uploadToCloudDisk(
                 body = openBody(),
             ).getOrThrow()
         }
-        val publishSongId = cloudUploadInfo(md5, hexSongId, fileName, song, album, artist, resourceId).getOrThrow()
-        cloudPublish(publishSongId).getOrThrow()
+        val publishSongId = cloudUploadInfo(md5, hexSongId, fileName, song, album, artist, token.resourceId).getOrThrow()
+        // pub 400=服务端转码未完成的临时拒绝(2026-10-09 实测:全新文件 info 后立即
+        // pub 必 400,十几秒后重发 200)——退避重试三次,仍失败才报错
+        var published = false
+        var lastError: Throwable? = null
+        for (attempt in 0 until 3) {
+            cloudPublish(publishSongId).fold(
+                onSuccess = { published = true },
+                onFailure = { e ->
+                    lastError = e
+                    if (attempt < 2) kotlinx.coroutines.delay(3000L * (attempt + 1))
+                },
+            )
+            if (published) break
+        }
+        if (!published) throw lastError ?: IllegalStateException("cloud publish failed")
         publishSongId.toLongOrNull() ?: 0L
     }
 

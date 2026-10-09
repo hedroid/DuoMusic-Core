@@ -6,6 +6,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.util.cio.toByteReadChannel
 import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -139,7 +140,8 @@ class CloudUploadProbe {
                     return@runBlocking
                 }
 
-                // 4. POST 上传
+                // 4. POST 上传(流式 body,复现 app 的 toByteReadChannel 路径;校验服务端
+                //    实收字节数 offset==size,防"空对象上传成功但转码丢弃"静默失败)
                 section("nosPost") {
                     val encodedKey = objectKey.replace("/", "%2F")
                     val resp =
@@ -148,7 +150,7 @@ class CloudUploadProbe {
                             header("Content-MD5", md5)
                             header(HttpHeaders.ContentType, "audio/mpeg")
                             header(HttpHeaders.ContentLength, size.toString())
-                            setBody(testFile.readBytes())
+                            setBody(testFile.inputStream().toByteReadChannel())
                         }
                     "status=${resp.status.value} body=${resp.bodyAsText().take(300)}"
                 }
