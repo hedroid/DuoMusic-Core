@@ -1124,11 +1124,15 @@ class NeteaseRepositoryImpl(
             client.uploadToCloudDisk(fileName, ext, sizeBytes, md5, song, album, artist, contentType, openBody, onUpload)
         }
 
-    /** 云盘入口封面:第一首歌的封面(limit=1 轻拉);null=空云盘/未登录/失败(调用方兜底云朵) */
-    suspend fun getCloudDiskCoverUrl(): String? =
+    /**
+     * 云盘入口信息(limit=1 轻拉):第一首歌封面 + 曲目数。封面给入口行铺底,
+     * UI 在其上叠印云朵图标(2026-10-10 用户澄清:照红心歌单做法,图标印在
+     * 歌曲封面上,不是换牌面);null cover=空云盘/第一首无封面(退蓝底白云牌面)。
+     */
+    suspend fun getCloudDiskEntryInfo(): Pair<String?, Int>? =
         withContext(Dispatchers.IO) {
             client.cloudDiskFiles(limit = 1).getOrNull()
-                ?.files?.firstOrNull()?.song?.coverUrl
+                ?.let { page -> page.files.firstOrNull()?.song?.coverUrl to page.totalCount }
         }
 
     /** 删除云盘歌曲(/cloud/del,不可逆;UI 层负责强确认) */
