@@ -1105,6 +1105,13 @@ class NeteaseRepositoryImpl(
             client.uploadToCloudDisk(fileName, ext, sizeBytes, md5, song, album, artist, contentType, openBody, onUpload)
         }
 
+    /** 云盘入口封面:第一首歌的封面(limit=1 轻拉);null=空云盘/未登录/失败(调用方兜底云朵) */
+    suspend fun getCloudDiskCoverUrl(): String? =
+        withContext(Dispatchers.IO) {
+            client.cloudDiskFiles(limit = 1).getOrNull()
+                ?.files?.firstOrNull()?.song?.coverUrl
+        }
+
     /** 删除云盘歌曲(/cloud/del,不可逆;UI 层负责强确认) */
     suspend fun deleteCloudDiskSong(songId: Long): Result<Boolean> =
         withContext(Dispatchers.IO) { client.deleteCloudDiskSong(songId) }
