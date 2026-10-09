@@ -1549,6 +1549,34 @@ suspend fun NeteaseClient.commentLike(
         }
     }
 
+/** 节目赞状态与计数；详情的 liked 随写入更新，commentInfo/list 的 liked 曾持续返回旧值。 */
+data class NeteaseDjLikeInfo(val liked: Boolean, val likedCount: Long, val commentCount: Long)
+
+suspend fun NeteaseClient.djProgramLikeInfo(programId: Long): Result<NeteaseDjLikeInfo> = runCatching {
+    val body = callApi("/dj/program/detail", mapOf("id" to programId))
+    check(body["code"].nInt() == 200) { "dj program detail code=${body["code"]}" }
+    val row = body.obj("program") ?: error("dj program detail missing")
+    check(row["id"].nLong() == programId && row.str("commentThreadId") == "A_DJ_1_$programId") {
+        "dj like info target mismatch"
+    }
+    NeteaseDjLikeInfo(
+        liked = (row["liked"] as? JsonPrimitive)?.booleanOrNull == true,
+        likedCount = row["likedCount"].nLong() ?: 0,
+        commentCount = row["commentCount"].nLong() ?: error("dj program commentCount missing"),
+    )
+}
+
+/** 节目本体点赞；业务 code 必须检查，调用方写后仍需重新读取状态。 */
+suspend fun NeteaseClient.setDjProgramLiked(programId: Long, liked: Boolean): Result<Unit> = runCatching {
+    val body = callXeApi(
+        if (liked) "/resource/like" else "/resource/unlike",
+        linkedMapOf("threadId" to "A_DJ_1_$programId"),
+    )
+    check(body["code"].nInt() == 200) {
+        body.str("msg") ?: body.str("message") ?: "dj like code=${body["code"]}"
+    }
+}
+
 /** 发表歌曲评论(xeapi 写通道);返回新评论 id,拿不到为 null。失败透传服务端 msg。 */
 suspend fun NeteaseClient.commentAdd(
     songId: Long,
@@ -1560,7 +1588,7 @@ suspend fun NeteaseClient.commentAdd(
         linkedMapOf(
             "threadId" to threadId,
             "content" to content,
-            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else "0",
+            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else if (threadId.startsWith("A_DJ_1_")) "1" else "0",
             "expressionPicId" to "-1",
             "bubbleId" to "-1",
         ),
@@ -1579,7 +1607,7 @@ suspend fun NeteaseClient.commentReply(
             "threadId" to threadId,
             "commentId" to parentCommentId.toString(),
             "content" to content,
-            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else "0",
+            "resourceType" to if (threadId.startsWith("R_MV_5_")) "5" else if (threadId.startsWith("A_DJ_1_")) "1" else "0",
         ),
     )
 
@@ -1587,12 +1615,13 @@ suspend fun NeteaseClient.commentReply(
 suspend fun NeteaseClient.commentDelete(
     songId: Long,
     commentId: Long,
+    threadId: String = "R_SO_4_$songId",
 ): Result<Unit> =
     runCatching {
         val body =
             callXeApi(
                 "/resource/comments/delete",
-                linkedMapOf("threadId" to "R_SO_4_$songId", "commentId" to commentId.toString()),
+                linkedMapOf("threadId" to threadId, "commentId" to commentId.toString()),
             )
         val code = (body["code"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
         if (code != 200) {
@@ -1651,12 +1680,14 @@ suspend fun NeteaseClient.songCommentsV2(
                     "showInner" to true,
                 ),
             )
-        val data = body.obj("data")
+        check(body["code"].nInt() == 200) { "comments code=${body["code"]}" }
+        val data = body.obj("data") ?: error("comments data missing")
+        val totalCount = data["totalCount"].nInt() ?: error("comments totalCount missing")
         NeteaseCommentPageV2(
-            comments = data?.array("comments").orEmpty().mapNotNull { parseNeteaseComment(it.jsonObject) },
-            totalCount = data?.get("totalCount")?.nInt(),
-            hasMore = (data?.get("hasMore") as? JsonPrimitive)?.content == "true",
-            cursor = data?.str("cursor"),
+            comments = data.array("comments").orEmpty().mapNotNull { parseNeteaseComment(it.jsonObject) },
+            totalCount = totalCount,
+            hasMore = (data["hasMore"] as? JsonPrimitive)?.content == "true",
+            cursor = data.str("cursor"),
         )
     }
 

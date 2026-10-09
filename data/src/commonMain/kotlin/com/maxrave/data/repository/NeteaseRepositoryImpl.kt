@@ -69,6 +69,9 @@ import com.maxrave.netease.commentFloor
 import com.maxrave.netease.commentLike
 import com.maxrave.netease.commentReply
 import com.maxrave.netease.commentAdd
+import com.maxrave.netease.NeteaseDjLikeInfo
+import com.maxrave.netease.djProgramLikeInfo
+import com.maxrave.netease.setDjProgramLiked
 import com.maxrave.netease.createPlaylist
 import com.maxrave.netease.songCommentsV2
 import com.maxrave.netease.dailyRecommendPlaylists
@@ -1432,6 +1435,12 @@ class NeteaseRepositoryImpl(
             onFailure = { Result.failure(it) },
         )
 
+    suspend fun getDjProgramLikeInfo(programId: Long): Result<NeteaseDjLikeInfo> =
+        client.djProgramLikeInfo(programId)
+
+    suspend fun setDjProgramLiked(programId: Long, liked: Boolean): Result<Unit> =
+        client.setDjProgramLiked(programId, liked)
+
     /**
      * 发表/回复歌曲评论(xeapi 写通道,官方 App 9.5.x 起唯一通路)。replyTo 非空=回复。
      * 服务端可能按账号/设备风控拒绝,失败透传服务端 msg。
@@ -1453,6 +1462,12 @@ class NeteaseRepositoryImpl(
                 val expected = "R_MV_5_$id"
                 require(threadId == null || threadId == expected) { "MV comment thread mismatch" }
                 id to expected
+            } else if (threadId?.startsWith("A_DJ_1_") == true) {
+                // songId 是节目音频的 mainSong.id；写入目标必须是节目线程。
+                require(songId.toLongOrNull() != null) { "Podcast main song id invalid" }
+                val programId = threadId.removePrefix("A_DJ_1_").toLong()
+                require(programId > 0) { "Podcast program id invalid" }
+                programId to threadId
             } else {
                 val id = songId.toLong()
                 id to "R_SO_4_$id"
