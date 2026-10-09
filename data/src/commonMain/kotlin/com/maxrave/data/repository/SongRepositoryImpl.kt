@@ -3,6 +3,7 @@ package com.maxrave.data.repository
 import com.maxrave.common.MERGING_DATA_TYPE
 import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_PREFIX
+import com.maxrave.common.NETEASE_CLOUD_DISK_PAGE_PREFIX
 import com.maxrave.common.NETEASE_RADIO_BATCH_SIZE
 import com.maxrave.data.db.datasource.LocalDataSource
 import com.maxrave.data.extension.getFullDataFromDB
@@ -456,6 +457,25 @@ internal class SongRepositoryImpl(
                                 emit(Pair(ArrayList(songs.map { it.toTrackPlaylist() }), nextToken))
                             }.onFailure {
                                 Logger.e(TAG, "netease playlist page failed: ${it.message}")
+                                emit(Pair(null, null))
+                            }
+                    }
+                } else if (continuation.startsWith(NETEASE_CLOUD_DISK_PAGE_PREFIX)) {
+                    // 云盘滚动分页:令牌 = NETEASE_CLOUD_PAGE_{offset},/v1/cloud/get 续一页;
+                    // 失败按分页结束(同上,不重试)
+                    val offset = continuation.removePrefix(NETEASE_CLOUD_DISK_PAGE_PREFIX).toIntOrNull()
+                    if (offset == null) {
+                        emit(Pair(null, null))
+                    } else {
+                        neteaseRepository
+                            .getCloudDiskPage(offset)
+                            .onSuccess { browse ->
+                                val nextToken =
+                                    browse.nextOffset?.let { "$NETEASE_CLOUD_DISK_PAGE_PREFIX$it" }
+                                Logger.d(TAG, "netease cloud page: offset=$offset got=${browse.songs.size} next=$nextToken")
+                                emit(Pair(ArrayList(browse.songs.map { it.toTrackPlaylist() }), nextToken))
+                            }.onFailure {
+                                Logger.e(TAG, "netease cloud page failed: ${it.message}")
                                 emit(Pair(null, null))
                             }
                     }

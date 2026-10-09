@@ -34,7 +34,9 @@ kotlin {
             dependencies {
                 implementation(libs.kotlin.stdlib)
                 implementation(projects.ktorExt)
-                implementation(libs.ktor.client.core)
+                // api:public API(uploadToCloudDisk 的 CloudUploadBodyFactory)暴露 ktor 的
+                // ByteReadChannel,下游 data/repo 模块编译需要它在 classpath
+                api(libs.ktor.client.core)
                 implementation(libs.ktor.client.encoding)
                 implementation(libs.ktor.serialization.kotlinx.json)
                 implementation(libs.ktor.client.content.negotiation)

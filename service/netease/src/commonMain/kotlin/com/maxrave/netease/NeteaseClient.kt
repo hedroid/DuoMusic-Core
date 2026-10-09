@@ -13,6 +13,7 @@ import com.maxrave.netease.model.NeteaseQrStatus
 import com.maxrave.ktorext.getEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -294,6 +295,56 @@ class NeteaseClient(
             }
         return response.bodyAsText()
     }
+
+    // ===== 云盘上传的 nos 对象存储通道(不走 music.163.com) =====
+
+    /**
+     * nos 上传节点发现(GET wanproxy.127.net/lbs):返回 upload[0] 直传节点。
+     * 每次上传前现查——节点会轮换,缓存没意义。
+     */
+    suspend fun nosUploadNode(bucket: String): Result<String> =
+        runCatching {
+            val response = http.get("https://wanproxy.127.net/lbs?version=1.0&bucketname=$bucket")
+            val body = json.parseToJsonElement(response.bodyAsText()).jsonObject
+            (body["upload"] as? kotlinx.serialization.json.JsonArray)
+                ?.firstOrNull()
+                ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                ?: error("lbs response has no upload node: ${response.bodyAsText().take(120)}")
+        }
+
+    /**
+     * nos 对象直传(POST {node}/{bucket}/{objectKey}?offset=0&complete=true&version=1.0):
+     * 单请求 10 分钟超时覆盖(全局 30s 对几十 MB 上传必砍);body 流式(平台层提供
+     * ByteReadChannel,避免整文件进内存——ktro get() 的同款教训)。
+     */
+    suspend fun nosPutObject(
+        uploadNode: String,
+        bucket: String,
+        objectKey: String,
+        nosToken: String,
+        contentMd5: String,
+        contentType: String,
+        contentLength: Long,
+        body: io.ktor.utils.io.ByteReadChannel,
+    ): Result<Unit> =
+        runCatching {
+            val encodedKey = objectKey.replace("/", "%2F")
+            val response =
+                http.post("$uploadNode/$bucket/$encodedKey?offset=0&complete=true&version=1.0") {
+                    timeout {
+                        requestTimeoutMillis = 600_000
+                    }
+                    header("x-nos-token", nosToken)
+                    header("Content-MD5", contentMd5)
+                    header(HttpHeaders.ContentType, contentType)
+                    header(HttpHeaders.ContentLength, contentLength.toString())
+                    setBody(body)
+                }
+            val text = response.bodyAsText()
+            check(response.status.value in 200..299) {
+                "nos put ${response.status.value}: ${text.take(200)}"
+            }
+        }
 
     /** NeriPlayer buildRequest 的两种头模式:eapi 模拟官方客户端,不吃浏览器头 */
     internal enum class HeaderProfile {

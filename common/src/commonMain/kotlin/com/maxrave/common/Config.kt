@@ -695,6 +695,18 @@ fun songRadioPlaylistId(videoId: String): String =
 const val NETEASE_PLAYLIST_PAGE_PREFIX = "NETEASE_PL_PAGE_"
 
 /**
+ * 网易云盘伪歌单哨兵:云盘详情页完全复用红心歌单页(PlaylistScreen),数据源换成
+ * /v1/cloud/get 分页。非纯数字,不会被误路由进网易数字歌单管线;YT 侧同理不认识它。
+ */
+const val NETEASE_CLOUD_DISK_PLAYLIST_ID = "NETEASE_CLOUD_DISK"
+
+/** 云盘详情页滚动分页令牌前缀(+下一页 offset),与网易歌单令牌同走 continuation 契约 */
+const val NETEASE_CLOUD_DISK_PAGE_PREFIX = "NETEASE_CLOUD_PAGE_"
+
+/** 云盘分页每页条数(/v1/cloud/get limit;云盘量级远小于歌单,200 足够) */
+const val NETEASE_CLOUD_DISK_PAGE_SIZE = 200
+
+/**
  * 网易播客队列总前缀（`NETEASE_PODCAST_RADIO_<radioId>` / `LATEST` / `TOPLIST`）：
  * loadMore 见此前缀**绝不走无尽电台**（尾曲 mainSong 当种子拉 simiSong 会把外来歌混进
  * 剧集队列，2026-09-29 实证），RADIO 子前缀续本台节目下一页，其余播完即止。

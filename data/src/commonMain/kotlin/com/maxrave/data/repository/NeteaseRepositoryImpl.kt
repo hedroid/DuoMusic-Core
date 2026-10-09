@@ -8,6 +8,7 @@ import com.maxrave.domain.data.entities.PlaylistEntity
 import com.maxrave.domain.data.entities.SongEntity
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_PREFIX
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_SIZE
+import com.maxrave.common.NETEASE_CLOUD_DISK_PAGE_SIZE
 import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
 import com.maxrave.domain.data.model.browse.album.Track
 import com.maxrave.domain.data.model.home.BrowsePage
@@ -129,6 +130,9 @@ import com.maxrave.netease.subscribedArtists
 import com.maxrave.netease.songRedCount
 import com.maxrave.netease.userStaredAlbums
 import com.maxrave.netease.personalizedNewSongs
+import com.maxrave.netease.cloudDiskFiles
+import com.maxrave.netease.uploadToCloudDisk
+import com.maxrave.netease.deleteCloudDiskSong
 import com.maxrave.netease.playlistDetail
 import com.maxrave.netease.playlistTracks
 import com.maxrave.netease.playlistTracksViaDetail
@@ -1035,6 +1039,74 @@ class NeteaseRepositoryImpl(
             val nextOffset = if (offset + slice.size < trackIds.size) offset + slice.size else null
             ordered to nextOffset
         }
+
+    // ===== 云盘(2026-10):详情页伪歌单数据源 + 上传 =====
+
+    /**
+     * 云盘分页(首页/续拉共用):simpleSong 即可播形状;缺席的极端形状用文件名兜底
+     * (songId 仍可取流)。容量只在响应携带时透传(首页头部展示)。
+     */
+    suspend fun getCloudDiskPage(offset: Int): Result<NeteaseCloudDiskBrowse> =
+        runCatching {
+            val page =
+                client.cloudDiskFiles(limit = NETEASE_CLOUD_DISK_PAGE_SIZE, offset = offset).getOrThrow()
+            val songs =
+                page.files.mapNotNull { f ->
+                    f.song
+                        ?: f.fileName?.let { name ->
+                            NeteaseSong(
+                                id = f.songId,
+                                name = name.substringBeforeLast('.'),
+                                artists = emptyList(),
+                                artistIds = emptyList(),
+                                albumId = null,
+                                albumName = null,
+                                durationMs = 0L,
+                                coverUrl = null,
+                                fee = 0,
+                                hasCopyright = true,
+                            )
+                        }
+                }
+            // 推进判底用 offset+返回条数 vs totalCount(hasMore 双形状坑不踩,MV 分页教训)
+            val nextOffset =
+                if (page.files.isEmpty() || offset + page.files.size >= page.totalCount) {
+                    null
+                } else {
+                    offset + page.files.size
+                }
+            NeteaseCloudDiskBrowse(
+                songs = songs,
+                nextOffset = nextOffset,
+                totalCount = page.totalCount,
+                usedSizeBytes = page.usedSizeBytes,
+                maxSizeBytes = page.maxSizeBytes,
+            )
+        }
+
+    /**
+     * 上传本地音频到云盘:md5 由平台层流式算好传入,openBody 每次返回新的上传流。
+     * 元数据(歌名/艺人/专辑)只是匹配失败时的显示兜底——服务端转码后按音频指纹
+     * 自动匹配曲库覆盖(探针实测)。
+     */
+    suspend fun uploadToCloudDisk(
+        fileName: String,
+        ext: String,
+        sizeBytes: Long,
+        md5: String,
+        song: String,
+        album: String,
+        artist: String,
+        contentType: String,
+        openBody: com.maxrave.netease.model.CloudUploadBodyFactory,
+    ): Result<Long> =
+        withContext(Dispatchers.IO) {
+            client.uploadToCloudDisk(fileName, ext, sizeBytes, md5, song, album, artist, contentType, openBody)
+        }
+
+    /** 删除云盘歌曲(/cloud/del,不可逆;UI 层负责强确认) */
+    suspend fun deleteCloudDiskSong(songId: Long): Result<Boolean> =
+        withContext(Dispatchers.IO) { client.deleteCloudDiskSong(songId) }
 
     /** 图表区块:网易排行榜映射进 YT Chart 形状(榜单卡点击进歌单;地区下拉对网易隐藏 → countries=null);
      *  数据走 [toplistCached],与 feed 的"排行榜"行共用一份请求 */
@@ -2414,6 +2486,15 @@ private fun List<NeteaseSong>.toSongHomeItem(title: String): HomeItem =
 /** 歌单卡副标题净化:纯数字/空白视为无描述(网易推荐接口的 description 是 0/1/2 序号) */
 private fun String?.sanitizeCardSubtitle(): String? =
     this?.trim()?.takeIf { it.isNotEmpty() && !it.all(Char::isDigit) }
+
+/** 云盘详情页数据(首页/续拉同形):曲目+下页游标(null=到底)+容量(头部展示用) */
+data class NeteaseCloudDiskBrowse(
+    val songs: List<NeteaseSong>,
+    val nextOffset: Int?,
+    val totalCount: Int,
+    val usedSizeBytes: Long?,
+    val maxSizeBytes: Long?,
+)
 
 /** NeteaseSong → 歌单页曲目形状(PlaylistBrowse.tracks = browse.album.Track) */
 internal fun NeteaseSong.toTrackPlaylist(liked: Boolean = false): com.maxrave.domain.data.model.browse.album.Track =

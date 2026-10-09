@@ -435,9 +435,25 @@ data class NeteaseCloudFile(
     val song: NeteaseSong?,
 )
 
-/** 云盘文件分页 */
+/** 云盘文件分页(size/maxSize=已用/总容量字节,详情页头部展示用) */
 data class NeteaseCloudDiskPage(
     val files: List<NeteaseCloudFile>,
     val totalCount: Int,
     val hasMore: Boolean,
+    val usedSizeBytes: Long? = null,
+    val maxSizeBytes: Long? = null,
 )
+
+/** nos 对象存储上传令牌(weapi /nos/token/alloc) */
+data class NeteaseNosUploadToken(
+    /** 上传目标对象路径(POST URL 里的 objectKey,含 obj/ 前缀) */
+    val objectKey: String,
+    /** 形如 "UPLOAD xxx:yyy:zzz" 的令牌,放 x-nos-token 头 */
+    val token: String,
+    /** 云盘资源 id(info/v2 提交元数据要回传) */
+    val resourceId: Long,
+)
+
+/** 上传流工厂:每次调用返回新的整文件读取流(ktor ByteReadChannel,流式不进内存)。
+ *  re-export 给无 ktor 依赖的下游模块(data/repo 层)当参数类型用。 */
+typealias CloudUploadBodyFactory = () -> io.ktor.utils.io.ByteReadChannel

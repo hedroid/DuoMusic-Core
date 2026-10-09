@@ -25,6 +25,7 @@ import com.maxrave.netease.model.NeteaseLyrics
 import com.maxrave.netease.model.NeteaseMv
 import com.maxrave.netease.model.NeteaseMvDetail
 import com.maxrave.netease.model.NeteaseMvSublist
+import com.maxrave.netease.model.NeteaseNosUploadToken
 import com.maxrave.netease.model.NeteasePodcastCategory
 import com.maxrave.netease.model.NeteasePlaylist
 import com.maxrave.netease.model.NeteaseQuality
@@ -1732,7 +1733,161 @@ suspend fun NeteaseClient.cloudDiskFiles(
                 } ?: emptyList(),
             totalCount = body["count"].nInt() ?: 0,
             hasMore = (body["hasMore"] as? JsonPrimitive)?.content == "true",
+            usedSizeBytes = body["size"].nLong(),
+            maxSizeBytes = body["maxSize"].nLong(),
         )
+    }
+
+// ----------------------------------------------------------------------------
+// 云盘上传(2026-10-09 探针实测形状,全链路真机验证过:check→alloc→lbs→nos POST→
+// info/v2→pub/v2,参考 NeteaseCloudMusicApiEnhanced plugins/songUpload.js)
+// ----------------------------------------------------------------------------
+
+/** nos 上传 bucket(官方 App 同款,-public 后缀) */
+private const val CLOUD_UPLOAD_BUCKET = "jd-musicrep-privatecloud-audio-public"
+
+/**
+ * 云盘上传检测(weapi /cloud/upload/check):同 md5 文件已在云盘时 needUpload=false(秒传,
+ * 直接提交元数据+发布)。返回 (hexSongId, needUpload)——songId 是十六进制指纹串,
+ * **不是**最终数字歌曲 id(info/v2 响应里的才是,见 [cloudUploadInfo])。
+ */
+suspend fun NeteaseClient.cloudUploadCheck(
+    md5: String,
+    lengthBytes: Long,
+): Result<Pair<String, Boolean>> =
+    runCatching {
+        val body =
+            callWeApi(
+                "/cloud/upload/check",
+                mapOf(
+                    "bitrate" to "999000",
+                    "ext" to "",
+                    "length" to lengthBytes,
+                    "md5" to md5,
+                    "songId" to "0",
+                    "version" to 1,
+                ),
+            )
+        val songId = body.str("songId") ?: error("upload/check missing songId: code=${body["code"]}")
+        songId to (body.str("needUpload") == "true")
+    }
+
+/** nos 上传令牌(weapi /nos/token/alloc):bucket 固定 -public 后缀 */
+suspend fun NeteaseClient.nosTokenAlloc(
+    md5: String,
+    fileName: String,
+    ext: String,
+): Result<NeteaseNosUploadToken> =
+    runCatching {
+        val body =
+            callWeApi(
+                "/nos/token/alloc",
+                mapOf(
+                    "bucket" to CLOUD_UPLOAD_BUCKET,
+                    "ext" to ext,
+                    "filename" to fileName,
+                    "local" to false,
+                    "nos_product" to 3,
+                    "type" to "audio",
+                    "md5" to md5,
+                ),
+            )
+        val result = body.obj("result") ?: error("token/alloc missing result: ${body["code"]}")
+        NeteaseNosUploadToken(
+            objectKey = result.str("objectKey") ?: error("token/alloc missing objectKey"),
+            token = result.str("token") ?: error("token/alloc missing token"),
+            resourceId = result["resourceId"].nLong() ?: error("token/alloc missing resourceId"),
+        )
+    }
+
+/**
+ * 云盘元数据提交(weapi /upload/cloud/info/v2):**返回发布用数字 songId**(与 check 的
+ * hex 串不同,pub/v2 必须用这个)。song/album/artist 只是匹配失败时的显示兜底——服务端
+ * 转码后会按音频指纹自动匹配曲库并覆盖(实测传占位元数据,列表里最终显示匹配出的真实歌名)。
+ */
+suspend fun NeteaseClient.cloudUploadInfo(
+    md5: String,
+    hexSongId: String,
+    fileName: String,
+    song: String,
+    album: String,
+    artist: String,
+    resourceId: Long,
+): Result<String> =
+    runCatching {
+        val body =
+            callWeApi(
+                "/upload/cloud/info/v2",
+                mapOf(
+                    "md5" to md5,
+                    "songid" to hexSongId,
+                    "filename" to fileName,
+                    "song" to song,
+                    "album" to album,
+                    "artist" to artist,
+                    "bitrate" to "999000",
+                    "resourceId" to resourceId,
+                ),
+            )
+        body.str("songId")?.takeIf { it.isNotEmpty() }
+            ?: error("info/v2 missing songId: code=${body["code"]}")
+    }
+
+/** 云盘发布(weapi /cloud/pub/v2):songid 用 info/v2 响应的数字 id */
+suspend fun NeteaseClient.cloudPublish(songId: String): Result<Unit> =
+    runCatching {
+        val body = callWeApi("/cloud/pub/v2", mapOf("songid" to songId))
+        check(body["code"].nInt() == 200 || body.str("code") == "200") {
+            "pub/v2 rejected: ${body["code"]} ${body.str("message").orEmpty()}"
+        }
+    }
+
+/** 删除云盘歌曲(api /cloud/del):songIds 传 "[id]" 数组体字面量,响应 succIds 判定成败 */
+suspend fun NeteaseClient.deleteCloudDiskSong(songId: Long): Result<Boolean> =
+    runCatching {
+        val body = callApi("/cloud/del", mapOf("songIds" to "[$songId]"))
+        (body.array("succIds") ?: emptyList()).any {
+            (it as? JsonPrimitive)?.content == songId.toString()
+        }
+    }
+
+/**
+ * 云盘上传端到端编排(check→alloc→[lbs→nos POST]→info/v2→pub/v2)。
+ * md5 由调用方算好传入(大文件流式摘要,平台层职责);[openBody] 每次调用返回新的
+ * 上传流(整文件一次 POST,流式不进内存)。返回发布成功的数字歌曲 id。
+ */
+suspend fun NeteaseClient.uploadToCloudDisk(
+    fileName: String,
+    ext: String,
+    sizeBytes: Long,
+    md5: String,
+    song: String,
+    album: String,
+    artist: String,
+    contentType: String,
+    openBody: com.maxrave.netease.model.CloudUploadBodyFactory,
+): Result<Long> =
+    runCatching {
+        val (hexSongId, needUpload) = cloudUploadCheck(md5, sizeBytes).getOrThrow()
+        var resourceId = 0L
+        if (needUpload) {
+            val token = nosTokenAlloc(md5, fileName, ext).getOrThrow()
+            resourceId = token.resourceId
+            val node = nosUploadNode(CLOUD_UPLOAD_BUCKET).getOrThrow()
+            nosPutObject(
+                uploadNode = node,
+                bucket = CLOUD_UPLOAD_BUCKET,
+                objectKey = token.objectKey,
+                nosToken = token.token,
+                contentMd5 = md5,
+                contentType = contentType,
+                contentLength = sizeBytes,
+                body = openBody(),
+            ).getOrThrow()
+        }
+        val publishSongId = cloudUploadInfo(md5, hexSongId, fileName, song, album, artist, resourceId).getOrThrow()
+        cloudPublish(publishSongId).getOrThrow()
+        publishSongId.toLongOrNull() ?: 0L
     }
 
 
