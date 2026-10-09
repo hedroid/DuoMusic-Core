@@ -1093,9 +1093,14 @@ internal class MediaServiceHandlerImpl(
                 }
                 // 网易 MV 无 DB 行,liked 由 mvDetail.subed 驱动(现值保留),查库只会拿回
                 // 恒 false 覆盖收藏对账结果(updateNotification 播放态变化高频重入,实测
-                // 2ms 内把 like(true) 翻回)
+                // 2ms 内把 like(true) 翻回)。播客节目同病:节目赞是 A_DJ_1_ 云端资源态,
+                // Room song.liked 恒 false 且写入不回写,切歌后的真值由 refreshRemoteSongLike
+                // 拉服务端落 controlState——这里查库只会把它翻回未赞。判定走队列哨兵
+                // (CR-22:只认 NETEASE_PODCAST_ 前缀,禁用曲目形状指纹)。
                 val liked =
-                    if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX)) {
+                    if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) ||
+                        _queueData.value?.data?.isNeteasePodcastQueue == true
+                    ) {
                         _controlState.value.isLiked
                     } else {
                         songRepository

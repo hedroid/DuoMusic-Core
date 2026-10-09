@@ -1053,11 +1053,19 @@ class JvmMediaPlayerHandlerImpl(
                 if (id.contains("Video")) {
                     id = id.removePrefix("Video")
                 }
+                // 与 android 端同款豁免:MV/播客节目的 liked 是云端资源态(Room 行不回写),
+                // 查库只会拿回恒 false 把对账结果翻回未赞;判定走队列哨兵(CR-22)。
                 val liked =
-                    songRepository
-                        .getSongById(id)
-                        .singleOrNull()
-                        ?.liked ?: false
+                    if (id.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) ||
+                        _queueData.value?.data?.isNeteasePodcastQueue == true
+                    ) {
+                        _controlState.value.isLiked
+                    } else {
+                        songRepository
+                            .getSongById(id)
+                            .singleOrNull()
+                            ?.liked ?: false
+                    }
                 Logger.w("Check liked", liked.toString())
                 _controlState.value = _controlState.value.copy(isLiked = liked)
                 onUpdateNotification.invoke(
