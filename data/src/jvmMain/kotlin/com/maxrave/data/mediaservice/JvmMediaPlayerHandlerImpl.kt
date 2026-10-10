@@ -2972,13 +2972,14 @@ class JvmMediaPlayerHandlerImpl(
                                 savedPosition,
                             )
                             dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
-                            dataStoreManager.setSavedQueueIdentity(
-                                playlistId = snapshot.data.playlistId ?: "",
-                                playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                                continuation = snapshot.data.continuation,
-                                // 纪元随身份同批原子写,恢复时按持久值还原(同 android 端)
-                                cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
-                            )
+                        dataStoreManager.setSavedQueueIdentity(
+                            playlistId = snapshot.data.playlistId ?: "",
+                            playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                            continuation = snapshot.data.continuation,
+                            // 纪元+回填出处随身份同批原子写(同 android 端)
+                            cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
+                            cloudDiskRestoreBackfilled = snapshot.data.cloudDiskRestoreBackfilled,
+                        )
                             Logger.d("Check saved", savedTitle)
                             Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
                             songRepository.recoverQueue(ArrayList(snapshotTracks))
@@ -3155,8 +3156,9 @@ class JvmMediaPlayerHandlerImpl(
                 dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
             val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
             // 旧快照(升级前保存,纪元 false)的云盘队列按出处回填逐行标记(同 android
-            // 端:保存为云盘队列的快照里每行都是云盘歌,成员=出处证明;挂载值按时长/
-            // 形状)。回填后队列自然进入标记纪元,新插入的无标记行=普通歌
+            // 端:队列级出处,证明不了逐行归属——升级前保存可能混着插入的普通歌;
+            // 挂载值按时长/形状)。回填后队列自然进入标记纪元,新插入的无标记行=
+            // 普通歌;逐行归属未证明由 cloudDiskRestoreBackfilled 承担,删除入口抑制
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3185,6 +3187,8 @@ class JvmMediaPlayerHandlerImpl(
                 QueueData.Data(
                     listTracks = restoredTracks,
                     firstPlayedTrack = currentPlayingTrack,
+                    // 回填出处标记:删除入口据此抑制(回填证明不了逐行归属)
+                    cloudDiskRestoreBackfilled = restoreLegacyCloudQueue,
                     // 还原保存时的真实队列身份(NETEASE_PODCAST_/FM/RADIO 前缀+续页令牌):
                     // SAVED_QUEUE 占位 id 会让无尽钩子误转电台、播客 UI 门控全失效;
                     // 旧数据没写过身份键时回退占位 id(旧行为)。android 端同修。
@@ -3198,10 +3202,19 @@ class JvmMediaPlayerHandlerImpl(
                 ),
             )
             if (!restoreLegacyCloudQueue) {
-                // 纪元按保存时的持久值还原(同 android 端:setQueueData 按曲目重算对恢复
-                // 场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照模式);回填分支
-                // 不覆写——按回填后的行重算的 true 正是目标语义
-                _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
+                // 纪元+回填出处按保存时的持久值还原(同 android 端:setQueueData 按
+                // 曲目重算对恢复场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照
+                // 模式);回填分支不覆写——按回填后的行重算的 true 正是目标语义
+                val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
+                _queueData.update {
+                    it.copy(
+                        data =
+                            it.data.copy(
+                                cloudDiskFlagEra = savedFlagEra,
+                                cloudDiskRestoreBackfilled = savedBackfilled,
+                            ),
+                    )
+                }
             }
             // playWhenReady is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it, and the seek below then lands

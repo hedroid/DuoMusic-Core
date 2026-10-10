@@ -125,11 +125,17 @@ interface DataStoreManager {
      *  数据未写过,按旧快照对待(语义自洽:更早的保存都不带标记) */
     val savedQueueCloudDiskFlagEra: Flow<Boolean>
 
+    /** 恢复队列的云盘标记是否来自"恢复旧快照时的回填"(与纪元同批原子写):回填
+     *  只能证明队列级出处、证明不了逐行归属(升级前保存可能混着插入的普通歌),
+     *  不可逆的"从云盘中删除"入口据此抑制;从云盘页重新起播后的保存会写 false */
+    val savedQueueCloudDiskBackfilled: Flow<Boolean>
+
     suspend fun setSavedQueueIdentity(
         playlistId: String,
         playlistType: String,
         continuation: String?,
         cloudDiskFlagEra: Boolean = false,
+        cloudDiskRestoreBackfilled: Boolean = false,
     )
 
     val sendBackToGoogle: Flow<String>

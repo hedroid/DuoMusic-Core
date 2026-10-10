@@ -3013,15 +3013,18 @@ internal class MediaServiceHandlerImpl(
                                 savedPosition,
                             )
                             dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
-                            dataStoreManager.setSavedQueueIdentity(
-                                playlistId = snapshot.data.playlistId ?: "",
-                                playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                                continuation = snapshot.data.continuation,
-                                // 纪元随身份同批原子写:恢复时按持久值还原,不按现存曲目
-                                // 重算(云盘歌被移光只剩普通歌的队列,重算会把纪元翻回
-                                // 旧快照模式,普通歌重启后重新受云盘菜单门控)
-                                cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
-                            )
+                        dataStoreManager.setSavedQueueIdentity(
+                            playlistId = snapshot.data.playlistId ?: "",
+                            playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                            continuation = snapshot.data.continuation,
+                            // 纪元+回填出处随身份同批原子写:恢复时按持久值还原,不按现存曲目
+                            // 重算(云盘歌被移光只剩普通歌的队列,重算会把纪元翻回
+                            // 旧快照模式,普通歌重启后重新受云盘菜单门控);回填出处
+                            // 跨重启跟着走——回填标记经一次保存落盘后,下轮恢复仍能
+                            // 读回"这些标记不是页面出处"的事实,删除入口持续抑制
+                            cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
+                            cloudDiskRestoreBackfilled = snapshot.data.cloudDiskRestoreBackfilled,
+                        )
                             Logger.d("Check saved", savedTitle)
                             Logger.w(TAG, "Check recover queue size: ${snapshotTracks.size}")
                             songRepository.recoverQueue(ArrayList(snapshotTracks))
@@ -3260,11 +3263,13 @@ internal class MediaServiceHandlerImpl(
                 dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
             val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
             // 旧快照(升级前保存,纪元 false)的云盘队列按出处回填逐行标记:保存为云盘
-            // 队列的快照里每一行都是云盘歌(成员=出处证明,不是形状推断);挂载值按时
-            // 长/形状(③恒 durationSeconds==0/空艺人=私人,其余=已匹配;时长不被
-            // catalog 重建回填污染)。回填后队列自然进入标记纪元(setQueueData 按行
-            // 重算 era=true)——此后向该队列新插入的无标记行=普通歌,不再被云盘菜单
-            // 门控;云盘行的删除入口也随成员确定而恢复(出处可靠,非形状授权)
+            // 队列的快照里每一行都"可能是"云盘歌——注意只是队列级出处,证明不了逐行
+            // 归属(升级前的保存可能混着"添加到队列"插入的普通歌,回填会给它们也补上
+            // 标记);挂载值按时长/形状(③恒 durationSeconds==0/空艺人=私人,其余=已匹配;
+            // 时长不被 catalog 重建回填污染)。回填后队列自然进入标记纪元(按行重算
+            // era=true)——此后向该队列新插入的无标记行=普通歌,不再被云盘菜单门控。
+            // 逐行归属未证明的代价由 cloudDiskRestoreBackfilled 承担:不可逆的
+            // "从云盘中删除"入口见此标记一律抑制,从云盘页重新起播(真页面出处)才恢复
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3293,6 +3298,8 @@ internal class MediaServiceHandlerImpl(
                 QueueData.Data(
                     listTracks = restoredTracks,
                     firstPlayedTrack = currentPlayingTrack,
+                    // 回填出处标记:删除入口据此抑制(回填证明不了逐行归属)
+                    cloudDiskRestoreBackfilled = restoreLegacyCloudQueue,
                     // 还原保存时的真实队列身份(NETEASE_PODCAST_/FM/RADIO 前缀+续页令牌):
                     // SAVED_QUEUE 占位 id 会让无尽钩子误转电台、播客 UI 门控(红心/歌词隐藏)
                     // 全失效;旧数据没写过身份键时回退占位 id(旧行为)
@@ -3306,12 +3313,21 @@ internal class MediaServiceHandlerImpl(
                 ),
             )
             if (!restoreLegacyCloudQueue) {
-                // 纪元按保存时的持久值还原(setQueueData 的按曲目重算对恢复场景是错的:
-                // 标记纪元队列的云盘歌被移光只剩普通歌时,重算会把纪元翻回旧快照模式,
-                // 普通歌重启后重新受云盘菜单门控);旧数据没写过纪元键→false=旧快照,
-                // 与更早保存全不带标记的事实自洽。回填分支不覆写:按回填后的行重算的
-                // true 正是目标语义
-                _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
+                // 纪元+回填出处按保存时的持久值还原(setQueueData 的按曲目重算对恢复
+                // 场景是错的:标记纪元队列的云盘歌被移光只剩普通歌时,重算会把纪元翻
+                // 回旧快照模式,普通歌重启后重新受云盘菜单门控);旧数据没写过纪元键→
+                // false=旧快照,与更早保存全不带标记的事实自洽。回填分支不覆写纪元:
+                // 按回填后的行重算的 true 正是目标语义;其出处标记已在 Data 上带入
+                val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
+                _queueData.update {
+                    it.copy(
+                        data =
+                            it.data.copy(
+                                cloudDiskFlagEra = savedFlagEra,
+                                cloudDiskRestoreBackfilled = savedBackfilled,
+                            ),
+                    )
+                }
             }
             // Playing is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it. The flag is re-read at each use

@@ -391,19 +391,26 @@ internal class DataStoreManagerImpl(
             preferences[FROM_SAVED_CLOUD_FLAG_ERA] ?: false
         }
 
+    override val savedQueueCloudDiskBackfilled: Flow<Boolean> =
+        settingsDataStore.data.map { preferences ->
+            preferences[FROM_SAVED_CLOUD_BACKFILLED] ?: false
+        }
+
     override suspend fun setSavedQueueIdentity(
         playlistId: String,
         playlistType: String,
         continuation: String?,
         cloudDiskFlagEra: Boolean,
+        cloudDiskRestoreBackfilled: Boolean,
     ) {
-        // 单 edit 原子写四键(三键+云盘标记纪元),恢复侧读到的永远是同一批保存的完整身份
+        // 单 edit 原子写五键(三键+云盘纪元+回填出处),恢复侧读到的永远是同一批保存的完整身份
         withContext(Dispatchers.IO) {
             settingsDataStore.edit { settings ->
                 settings[FROM_SAVED_PLAYLIST_ID] = playlistId
                 settings[FROM_SAVED_PLAYLIST_TYPE] = playlistType
                 settings[FROM_SAVED_CONTINUATION] = continuation ?: ""
                 settings[FROM_SAVED_CLOUD_FLAG_ERA] = cloudDiskFlagEra
+                settings[FROM_SAVED_CLOUD_BACKFILLED] = cloudDiskRestoreBackfilled
             }
         }
     }
@@ -2190,6 +2197,7 @@ internal class DataStoreManagerImpl(
         val FROM_SAVED_PLAYLIST_TYPE = stringPreferencesKey("from_saved_playlist_type")
         val FROM_SAVED_CONTINUATION = stringPreferencesKey("from_saved_continuation")
         val FROM_SAVED_CLOUD_FLAG_ERA = booleanPreferencesKey("from_saved_cloud_flag_era")
+        val FROM_SAVED_CLOUD_BACKFILLED = booleanPreferencesKey("from_saved_cloud_backfilled")
 
         val KILL_SERVICE_ON_EXIT = stringPreferencesKey("kill_service_on_exit")
         val CROSSFADE_ENABLED = stringPreferencesKey("crossfade_enabled")
