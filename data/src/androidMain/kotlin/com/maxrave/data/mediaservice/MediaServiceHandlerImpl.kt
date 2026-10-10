@@ -3262,14 +3262,17 @@ internal class MediaServiceHandlerImpl(
             val savedPlaylistId =
                 dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
             val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
-            // 旧快照(升级前保存,纪元 false)的云盘队列按出处回填逐行标记:保存为云盘
-            // 队列的快照里每一行都"可能是"云盘歌——注意只是队列级出处,证明不了逐行
-            // 归属(升级前的保存可能混着"添加到队列"插入的普通歌,回填会给它们也补上
-            // 标记);挂载值按时长/形状(③恒 durationSeconds==0/空艺人=私人,其余=已匹配;
-            // 时长不被 catalog 重建回填污染)。回填后队列自然进入标记纪元(按行重算
-            // era=true)——此后向该队列新插入的无标记行=普通歌,不再被云盘菜单门控。
+            // 旧快照(升级前保存,纪元 false)的云盘队列回填——只给"形状铁定的私人行"
+            // 断 false(③:durationSeconds==0/空艺人;时长不被 catalog 重建回填污染):
+            // ③在云盘常见、元数据残缺的插入普通歌罕见,先验压倒性;**其余行保持
+            // null(归属未知)**——升级前的保存可能混着"添加到队列"插入的普通歌,
+            // 队列级出处证明不了逐行归属,断成云盘会让混入的普通歌吃云盘门控
+            // (元数据残缺者点赞/加歌单被置灰)。任何一行带上标记即让队列进入标记
+            // 纪元(按行重算 era=true)——此后新插入的无标记行=普通歌,且回填队列里
+            // 的 null 原始行(①②云盘歌/混入普通歌不可分)也按普通歌对待,写门控
+            // 不吃形状断言;②的菜单门控损失仅限回填会话(云盘页重载即恢复逐行出处)。
             // 逐行归属未证明的代价由 cloudDiskRestoreBackfilled 承担:不可逆的
-            // "从云盘中删除"入口见此标记一律抑制,从云盘页重新起播(真页面出处)才恢复
+            // "从云盘中删除"入口见此标记一律抑制,从云盘页重新起播才恢复
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3282,11 +3285,10 @@ internal class MediaServiceHandlerImpl(
             val restoredTracks =
                 if (restoreLegacyCloudQueue) {
                     listTracks.map { row ->
-                        if (row.neteaseCloudDiskMounted == null) {
-                            row.copy(
-                                neteaseCloudDiskMounted =
-                                    !(row.durationSeconds == 0 || row.artists.isNullOrEmpty()),
-                            )
+                        if (row.neteaseCloudDiskMounted == null &&
+                            (row.durationSeconds == 0 || row.artists.isNullOrEmpty())
+                        ) {
+                            row.copy(neteaseCloudDiskMounted = false)
                         } else {
                             row
                         }

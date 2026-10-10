@@ -3155,10 +3155,10 @@ class JvmMediaPlayerHandlerImpl(
             val savedPlaylistId =
                 dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
             val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
-            // 旧快照(升级前保存,纪元 false)的云盘队列按出处回填逐行标记(同 android
-            // 端:队列级出处,证明不了逐行归属——升级前保存可能混着插入的普通歌;
-            // 挂载值按时长/形状)。回填后队列自然进入标记纪元,新插入的无标记行=
-            // 普通歌;逐行归属未证明由 cloudDiskRestoreBackfilled 承担,删除入口抑制
+            // 旧快照(升级前保存,纪元 false)的云盘队列回填(同 android 端):只给形状
+            // 铁定的私人行(③:时长 0/空艺人)断 false,其余行保持 null(归属未知,
+            // 队列级出处证明不了逐行归属);带标记行让队列进标记纪元,新插入与归属
+            // 未知的原始行都按普通歌对待;删除入口由 cloudDiskRestoreBackfilled 抑制
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3171,11 +3171,10 @@ class JvmMediaPlayerHandlerImpl(
             val restoredTracks =
                 if (restoreLegacyCloudQueue) {
                     listTracks.map { row ->
-                        if (row.neteaseCloudDiskMounted == null) {
-                            row.copy(
-                                neteaseCloudDiskMounted =
-                                    !(row.durationSeconds == 0 || row.artists.isNullOrEmpty()),
-                            )
+                        if (row.neteaseCloudDiskMounted == null &&
+                            (row.durationSeconds == 0 || row.artists.isNullOrEmpty())
+                        ) {
+                            row.copy(neteaseCloudDiskMounted = false)
                         } else {
                             row
                         }
