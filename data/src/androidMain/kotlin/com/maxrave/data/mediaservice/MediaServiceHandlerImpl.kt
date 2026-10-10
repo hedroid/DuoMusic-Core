@@ -2969,20 +2969,27 @@ internal class MediaServiceHandlerImpl(
                 // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
                 // 恢复时旧曲被前插成混入队列(2026-09-29 实证的拼接队列即此),等下一个
                 // 一致状态再存。
+                // ⚠️ 校验与落盘必须吃同一份快照:下方有两个 DataStore 挂起点,校验后
+                // 协程可能挂起很久,期间换队/重建把 listTracks 清空或截成分块回填的
+                // 半截——恢复执行时再读 queueData 会把不完整队列存进 DB(实测存过
+                // 仅 1-2 首的快照,"保存撞重建窗口存不完整队列"的终因)。单读快照后,
+                // 落盘的永远是通过校验的那一份;身份三键同快照取,不产生新旧混搭对。
+                val snapshot = queueData.value
+                val snapshotTracks = snapshot.data.listTracks
                 val videoId = nowPlayingState.value.songEntity?.videoId
                 if (videoId != null &&
-                    queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZED &&
-                    _queueData.value.data.listTracks.any { it.videoId == videoId }
+                    snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
+                    snapshotTracks.any { it.videoId == videoId }
                 ) {
                     dataStoreManager.saveRecentSong(
                         videoId,
                         player.contentPosition,
                     )
-                    dataStoreManager.setPlaylistFromSaved(queueData.value.data.playlistName ?: "")
+                    dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
                     dataStoreManager.setSavedQueueIdentity(
-                        playlistId = queueData.value.data.playlistId ?: "",
-                        playlistType = (queueData.value.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                        continuation = queueData.value.data.continuation,
+                        playlistId = snapshot.data.playlistId ?: "",
+                        playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                        continuation = snapshot.data.continuation,
                     )
                     Logger.d(
                         "Check saved",
@@ -2991,11 +2998,8 @@ internal class MediaServiceHandlerImpl(
                             ?.title
                             .toString(),
                     )
-                    val temp: ArrayList<Track> = ArrayList()
-                    temp.clear()
-                    temp.addAll(_queueData.value.data.listTracks)
-                    Logger.w("Check recover queue", temp.toString())
-                    songRepository.recoverQueue(temp)
+                    Logger.w(TAG, "Check recover queue size: ${snapshotTracks.size}")
+                    songRepository.recoverQueue(ArrayList(snapshotTracks))
                 }
             }
         if (runBlocking) {
