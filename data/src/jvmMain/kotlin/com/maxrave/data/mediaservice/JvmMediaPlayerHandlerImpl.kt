@@ -12,6 +12,7 @@ import com.maxrave.common.Config.VIDEO_CLICK
 import com.maxrave.common.DESC
 import com.maxrave.common.LOCAL_PLAYLIST_ID
 import com.maxrave.common.LOCAL_PLAYLIST_ID_SAVED_QUEUE
+import com.maxrave.common.NETEASE_CLOUD_DISK_PLAYLIST_ID
 import com.maxrave.common.MERGING_DATA_TYPE
 import com.maxrave.common.NETEASE_FM_PLAYLIST_ID
 import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
@@ -2935,10 +2936,13 @@ class JvmMediaPlayerHandlerImpl(
 
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
         val seq = saveRecentSongSeq.incrementAndGet()
-        // player 状态先在调用线程读(同 android 端);锁段整体挪 IO,防持锁协程在
-        // 主线程作用域挂起后与 release() 的 runBlocking 互等死锁
+        // player/当前曲状态先在调用线程读(ExoPlayer 非线程安全;位置与曲 id 相邻
+        // 非挂起语句捕获,同线程内切歌回调无法插入两读之间——锁内晚读会配错对);
+        // 锁段整体挪 IO,防持锁协程在主线程作用域挂起后与 release() 的 runBlocking
+        // 互等死锁
         val savedPosition = player.contentPosition
         val savedTitle = player.currentMediaItem?.metadata?.title.toString()
+        val savedVideoId = nowPlayingState.value.songEntity?.videoId
         val unit =
             suspend {
                 withContext(Dispatchers.IO) {
@@ -2957,13 +2961,14 @@ class JvmMediaPlayerHandlerImpl(
                         // 挂起点,期间换队/重建把 listTracks 清空/截半,恢复读会存不完整队列。
                         val snapshot = queueData.value
                         val snapshotTracks = snapshot.data.listTracks
-                        val videoId = nowPlayingState.value.songEntity?.videoId
-                        if (videoId != null &&
+                        // 用同刻捕获的 id 校验与落盘:锁内快照若已换队/重建,捕获 id
+                        // 不在新列=跳过,杜绝"新队列+旧曲进度"的错位对
+                        if (savedVideoId != null &&
                             snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
-                            snapshotTracks.any { it.videoId == videoId }
+                            snapshotTracks.any { it.videoId == savedVideoId }
                         ) {
                             dataStoreManager.saveRecentSong(
-                                videoId,
+                                savedVideoId,
                                 savedPosition,
                             )
                             dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
@@ -3146,6 +3151,14 @@ class JvmMediaPlayerHandlerImpl(
             // the playing track or the UI queue and the player playlist end up shifted
             // against each other.
             var index = savedTracks.indexOfFirst { it.videoId == currentPlayingTrack.videoId }
+            val savedPlaylistId =
+                dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
+            val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
+            // 旧快照(升级前保存,纪元 false)的云盘队列按出处回填逐行标记(同 android
+            // 端:保存为云盘队列的快照里每行都是云盘歌,成员=出处证明;挂载值按时长/
+            // 形状)。回填后队列自然进入标记纪元,新插入的无标记行=普通歌
+            val restoreLegacyCloudQueue =
+                !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
                 if (index == -1) {
                     index = 0
@@ -3153,15 +3166,29 @@ class JvmMediaPlayerHandlerImpl(
                 } else {
                     savedTracks.toCollection(arrayListOf())
                 }
+            val restoredTracks =
+                if (restoreLegacyCloudQueue) {
+                    listTracks.map { row ->
+                        if (row.neteaseCloudDiskMounted == null) {
+                            row.copy(
+                                neteaseCloudDiskMounted =
+                                    !(row.durationSeconds == 0 || row.artists.isNullOrEmpty()),
+                            )
+                        } else {
+                            row
+                        }
+                    }
+                } else {
+                    listTracks
+                }
             setQueueData(
                 QueueData.Data(
-                    listTracks = listTracks,
+                    listTracks = restoredTracks,
                     firstPlayedTrack = currentPlayingTrack,
                     // 还原保存时的真实队列身份(NETEASE_PODCAST_/FM/RADIO 前缀+续页令牌):
                     // SAVED_QUEUE 占位 id 会让无尽钩子误转电台、播客 UI 门控全失效;
                     // 旧数据没写过身份键时回退占位 id(旧行为)。android 端同修。
-                    playlistId =
-                        dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE },
+                    playlistId = savedPlaylistId,
                     playlistName = dataStoreManager.playlistFromSaved.first(),
                     playlistType =
                         runCatching {
@@ -3170,10 +3197,12 @@ class JvmMediaPlayerHandlerImpl(
                     continuation = dataStoreManager.continuationFromSaved.first().ifEmpty { null },
                 ),
             )
-            // 纪元按保存时的持久值还原(同 android 端:setQueueData 按曲目重算对恢复
-            // 场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照模式)
-            val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
-            _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
+            if (!restoreLegacyCloudQueue) {
+                // 纪元按保存时的持久值还原(同 android 端:setQueueData 按曲目重算对恢复
+                // 场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照模式);回填分支
+                // 不覆写——按回填后的行重算的 true 正是目标语义
+                _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
+            }
             // playWhenReady is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it, and the seek below then lands
             // it on the saved index and position.
