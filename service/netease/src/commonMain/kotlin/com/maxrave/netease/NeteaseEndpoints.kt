@@ -85,6 +85,7 @@ suspend fun NeteaseClient.searchSongs(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=1 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items = result?.array("songs")?.map { it.toSong() } ?: emptyList(),
@@ -109,6 +110,7 @@ suspend fun NeteaseClient.searchPlaylists(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=1000 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items = result?.array("playlists")?.map { it.toPlaylist() } ?: emptyList(),
@@ -133,6 +135,7 @@ suspend fun NeteaseClient.searchArtists(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=100 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items =
@@ -223,6 +226,7 @@ suspend fun NeteaseClient.searchSuggest(
                     "limit" to limit,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "search/suggest/web code=${body["code"]}" }
         val result = body.obj("result")
         // suggest/web 的 song 不带专辑封面(al.picUrl 缺失),批量 songDetail 一次请求补齐;
         // 失败/条数不符则保留无封面原样(卡片有占位图兜底)
@@ -258,6 +262,7 @@ suspend fun NeteaseClient.searchHot(): Result<List<NeteaseHotWord>> =
                 "/search/hot",
                 mapOf("type" to 1111),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "search/hot code=${body["code"]}" }
         body.obj("result")?.array("hots")?.mapNotNull { element ->
             val obj = element.jsonObject
             val word = obj.str("first") ?: return@mapNotNull null
@@ -665,6 +670,7 @@ suspend fun NeteaseClient.searchAlbums(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=10 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items = result?.array("albums")?.map { it.toAlbum() } ?: emptyList(),
