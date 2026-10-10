@@ -338,6 +338,15 @@ data class QueueData(
          * 重新起播(setQueueData 装载页面曲目)即清零,删除入口随之恢复。
          */
         val cloudDiskRestoreBackfilled: Boolean = false,
+        /**
+         * 旧快照(纪元 false)恢复时的**原始行注册表**:恢复那一刻队列里全部行的
+         * videoId。旧快照的 null 行没有可靠逐行归属,但"恢复后新插入"与"恢复时
+         * 就在"可以精确区分——UI 的 null 行判定:纪元队列=插入普通歌;非纪元且
+         * 在注册表=原始行按云盘歌对待(菜单门控/形状启发式保守判私人);非纪元且
+         * 不在注册表=恢复后插入的普通歌(不吃任何云盘门控)。不持久化:跨重启后
+         * 上轮插入已随保存成为快照一员,归入原始行(信息缺失的不可恢复边界)。
+         */
+        val cloudDiskRestoredOriginalIds: Set<String> = emptySet(),
     ) {
         /**
          * 播客队列唯一判定:只认显式前缀。队列身份三键持久化(fd62b5a)后恢复路径

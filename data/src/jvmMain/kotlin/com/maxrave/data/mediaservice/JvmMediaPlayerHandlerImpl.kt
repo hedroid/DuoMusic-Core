@@ -3156,9 +3156,9 @@ class JvmMediaPlayerHandlerImpl(
                 dataStoreManager.playlistIdFromSaved.first().ifEmpty { LOCAL_PLAYLIST_ID_SAVED_QUEUE }
             val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
             // 旧快照(升级前保存,纪元 false)的云盘队列回填(同 android 端):只给形状
-            // 铁定的私人行(③:时长 0/空艺人)断 false,其余行保持 null(归属未知,
-            // 队列级出处证明不了逐行归属);带标记行让队列进标记纪元,新插入与归属
-            // 未知的原始行都按普通歌对待;删除入口由 cloudDiskRestoreBackfilled 抑制
+            // 铁定的私人行(③:时长 0/空艺人)断 false,其余行保持 null(归属未知);
+            // 回填不翻纪元(恢复队列一律按持久值还原),原始行与会话内插入靠
+            // restoredOriginalIds 注册表区分;删除入口由 cloudDiskRestoreBackfilled 抑制
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3182,12 +3182,20 @@ class JvmMediaPlayerHandlerImpl(
                 } else {
                     listTracks
                 }
+            val restoredOriginalIds =
+                if (restoreLegacyCloudQueue) {
+                    restoredTracks.map { it.videoId }.toSet()
+                } else {
+                    emptySet()
+                }
             setQueueData(
                 QueueData.Data(
                     listTracks = restoredTracks,
                     firstPlayedTrack = currentPlayingTrack,
                     // 回填出处标记:删除入口据此抑制(回填证明不了逐行归属)
                     cloudDiskRestoreBackfilled = restoreLegacyCloudQueue,
+                    // 原始行注册表:旧快照 null 行的"原始 vs 会话内插入"判定依据
+                    cloudDiskRestoredOriginalIds = restoredOriginalIds,
                     // 还原保存时的真实队列身份(NETEASE_PODCAST_/FM/RADIO 前缀+续页令牌):
                     // SAVED_QUEUE 占位 id 会让无尽钩子误转电台、播客 UI 门控全失效;
                     // 旧数据没写过身份键时回退占位 id(旧行为)。android 端同修。
@@ -3200,20 +3208,17 @@ class JvmMediaPlayerHandlerImpl(
                     continuation = dataStoreManager.continuationFromSaved.first().ifEmpty { null },
                 ),
             )
-            if (!restoreLegacyCloudQueue) {
-                // 纪元+回填出处按保存时的持久值还原(同 android 端:setQueueData 按
-                // 曲目重算对恢复场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照
-                // 模式);回填分支不覆写——按回填后的行重算的 true 正是目标语义
-                val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
-                _queueData.update {
-                    it.copy(
-                        data =
-                            it.data.copy(
-                                cloudDiskFlagEra = savedFlagEra,
-                                cloudDiskRestoreBackfilled = savedBackfilled,
-                            ),
-                    )
-                }
+            // 纪元+回填出处一律按保存时的持久值还原(同 android 端:重算会让③回填
+            // 标记翻纪元/移光场景翻回);回填出处取"本轮回填或持久值"之或
+            val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
+            _queueData.update {
+                it.copy(
+                    data =
+                        it.data.copy(
+                            cloudDiskFlagEra = savedFlagEra,
+                            cloudDiskRestoreBackfilled = restoreLegacyCloudQueue || savedBackfilled,
+                        ),
+                )
             }
             // playWhenReady is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it, and the seek below then lands

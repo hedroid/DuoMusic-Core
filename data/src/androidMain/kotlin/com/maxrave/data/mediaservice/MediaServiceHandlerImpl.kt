@@ -3266,13 +3266,13 @@ internal class MediaServiceHandlerImpl(
             // 断 false(③:durationSeconds==0/空艺人;时长不被 catalog 重建回填污染):
             // ③在云盘常见、元数据残缺的插入普通歌罕见,先验压倒性;**其余行保持
             // null(归属未知)**——升级前的保存可能混着"添加到队列"插入的普通歌,
-            // 队列级出处证明不了逐行归属,断成云盘会让混入的普通歌吃云盘门控
-            // (元数据残缺者点赞/加歌单被置灰)。任何一行带上标记即让队列进入标记
-            // 纪元(按行重算 era=true)——此后新插入的无标记行=普通歌,且回填队列里
-            // 的 null 原始行(①②云盘歌/混入普通歌不可分)也按普通歌对待,写门控
-            // 不吃形状断言;②的菜单门控损失仅限回填会话(云盘页重载即恢复逐行出处)。
-            // 逐行归属未证明的代价由 cloudDiskRestoreBackfilled 承担:不可逆的
-            // "从云盘中删除"入口见此标记一律抑制,从云盘页重新起播才恢复
+            // 队列级出处证明不了逐行归属。⚠️ 回填不翻纪元:纪元是"队列以标记纪元
+            // 建立"的出处事实,恢复队列一律按持久值还原(旧快照恒 false)——若按
+            // 行内容重算,③ 标记会把旧快照翻成纪元队列,其余无标记的真实云盘歌
+            // (①②)被当插入普通歌绕开菜单门控;没有③的旧快照则纪元仍 false,
+            // 原始行与插入行靠 restoredOriginalIds 注册表区分(恢复那一刻就在=原始
+            // 行按云盘对待;恢复后才进=插入普通歌)。逐行归属未证明的代价由
+            // cloudDiskRestoreBackfilled 承担:不可逆删除全队列抑制,云盘页重载恢复
             val restoreLegacyCloudQueue =
                 !savedFlagEra && savedPlaylistId == NETEASE_CLOUD_DISK_PLAYLIST_ID
             val listTracks =
@@ -3296,12 +3296,20 @@ internal class MediaServiceHandlerImpl(
                 } else {
                     listTracks
                 }
+            val restoredOriginalIds =
+                if (restoreLegacyCloudQueue) {
+                    restoredTracks.map { it.videoId }.toSet()
+                } else {
+                    emptySet()
+                }
             setQueueData(
                 QueueData.Data(
                     listTracks = restoredTracks,
                     firstPlayedTrack = currentPlayingTrack,
                     // 回填出处标记:删除入口据此抑制(回填证明不了逐行归属)
                     cloudDiskRestoreBackfilled = restoreLegacyCloudQueue,
+                    // 原始行注册表:旧快照 null 行的"原始 vs 会话内插入"判定依据
+                    cloudDiskRestoredOriginalIds = restoredOriginalIds,
                     // 还原保存时的真实队列身份(NETEASE_PODCAST_/FM/RADIO 前缀+续页令牌):
                     // SAVED_QUEUE 占位 id 会让无尽钩子误转电台、播客 UI 门控(红心/歌词隐藏)
                     // 全失效;旧数据没写过身份键时回退占位 id(旧行为)
@@ -3314,22 +3322,21 @@ internal class MediaServiceHandlerImpl(
                     continuation = dataStoreManager.continuationFromSaved.first().ifEmpty { null },
                 ),
             )
-            if (!restoreLegacyCloudQueue) {
-                // 纪元+回填出处按保存时的持久值还原(setQueueData 的按曲目重算对恢复
-                // 场景是错的:标记纪元队列的云盘歌被移光只剩普通歌时,重算会把纪元翻
-                // 回旧快照模式,普通歌重启后重新受云盘菜单门控);旧数据没写过纪元键→
-                // false=旧快照,与更早保存全不带标记的事实自洽。回填分支不覆写纪元:
-                // 按回填后的行重算的 true 正是目标语义;其出处标记已在 Data 上带入
-                val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
-                _queueData.update {
-                    it.copy(
-                        data =
-                            it.data.copy(
-                                cloudDiskFlagEra = savedFlagEra,
-                                cloudDiskRestoreBackfilled = savedBackfilled,
-                            ),
-                    )
-                }
+            // 纪元+回填出处一律按保存时的持久值还原(setQueueData 的按曲目重算对
+            // 恢复场景是错的:旧快照的③回填标记会把它翻成 true,其余无标记原始行
+            // (①②)随之被当插入普通歌绕开菜单门控;标记纪元队列的云盘歌被移光只剩
+            // 普通歌时,重算又会翻回 false)。旧数据没写过纪元键→false=旧快照,自洽。
+            // 回填出处取"本轮回填或持久值"之或:首次回填的会话持久键还没写,不能把
+            // 刚置上的标记冲掉
+            val savedBackfilled = dataStoreManager.savedQueueCloudDiskBackfilled.first()
+            _queueData.update {
+                it.copy(
+                    data =
+                        it.data.copy(
+                            cloudDiskFlagEra = savedFlagEra,
+                            cloudDiskRestoreBackfilled = restoreLegacyCloudQueue || savedBackfilled,
+                        ),
+                )
             }
             // Playing is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it. The flag is re-read at each use
