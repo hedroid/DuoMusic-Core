@@ -118,10 +118,18 @@ interface DataStoreManager {
 
     val continuationFromSaved: Flow<String>
 
+    /** 恢复队列的云盘标记纪元(与三键同批原子写):纪元描述"这队队列以什么形态
+     *  建立"(标记纪元=无标记行是插入的普通歌;旧快照=无标记行按云盘歌对待),
+     *  不能恢复时按现存曲目重算——标记纪元队列的云盘歌被移光只剩普通歌时,重算
+     *  会把纪元翻回旧快照模式,普通歌重启后重新受云盘菜单门控。缺省 false=旧
+     *  数据未写过,按旧快照对待(语义自洽:更早的保存都不带标记) */
+    val savedQueueCloudDiskFlagEra: Flow<Boolean>
+
     suspend fun setSavedQueueIdentity(
         playlistId: String,
         playlistType: String,
         continuation: String?,
+        cloudDiskFlagEra: Boolean = false,
     )
 
     val sendBackToGoogle: Flow<String>

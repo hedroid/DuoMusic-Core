@@ -2970,53 +2970,60 @@ internal class MediaServiceHandlerImpl(
 
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
         val seq = saveRecentSongSeq.incrementAndGet()
+        // player 状态必须在调用线程先读(ExoPlayer 非线程安全);锁段整体挪 IO——
+        // 锁内要挂起等 DataStore/Room,若持锁协程在主线程作用域里恢复,而
+        // release() 恰在主线程 runBlocking 等同一把锁:持锁协程恢复所需的主线程
+        // 被占死,锁永远不释放,release 死锁。挪 IO 后持锁/恢复全在 IO 线程,
+        // release 的 runBlocking 只等 IO 上确可推进的工作
+        val savedPosition = player.contentPosition
+        val savedTitle = player.currentMediaItem?.metadata?.title.toString()
         val unit =
             suspend {
-                saveRecentSongMutex.withLock {
-                    if (seq <= saveRecentSongLastWrittenSeq) {
-                        return@withLock // 过期保存:更新的快照已落盘,这笔作废
-                    }
-                    // Skip while the playing song is unknown or the queue is mid-rebuild:
-                    // updateCatalog clears listTracks and re-inserts the current track only at
-                    // the end, so saving in that window persists a queue missing the current
-                    // track (plus a blank media id), which desyncs the next restore.
-                    // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
-                    // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
-                    // 恢复时旧曲被前插成混入队列(2026-09-29 实证的拼接队列即此),等下一个
-                    // 一致状态再存。
-                    // ⚠️ 校验与落盘必须吃同一份快照:下方有两个 DataStore 挂起点,校验后
-                    // 协程可能挂起很久,期间换队/重建把 listTracks 清空或截成分块回填的
-                    // 半截——恢复执行时再读 queueData 会把不完整队列存进 DB(实测存过
-                    // 仅 1-2 首的快照,"保存撞重建窗口存不完整队列"的终因)。单读快照后,
-                    // 落盘的永远是通过校验的那一份;身份三键同快照取,不产生新旧混搭对。
-                    val snapshot = queueData.value
-                    val snapshotTracks = snapshot.data.listTracks
-                    val videoId = nowPlayingState.value.songEntity?.videoId
-                    if (videoId != null &&
-                        snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
-                        snapshotTracks.any { it.videoId == videoId }
-                    ) {
-                        dataStoreManager.saveRecentSong(
-                            videoId,
-                            player.contentPosition,
-                        )
-                        dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
-                        dataStoreManager.setSavedQueueIdentity(
-                            playlistId = snapshot.data.playlistId ?: "",
-                            playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                            continuation = snapshot.data.continuation,
-                        )
-                        Logger.d(
-                            "Check saved",
-                            player.currentMediaItem
-                                ?.metadata
-                                ?.title
-                                .toString(),
-                        )
-                        Logger.w(TAG, "Check recover queue size: ${snapshotTracks.size}")
-                        songRepository.recoverQueue(ArrayList(snapshotTracks))
-                        saveRecentSongLastWrittenSeq = seq
-                    }
+                withContext(Dispatchers.IO) {
+                    saveRecentSongMutex.withLock {
+                        if (seq <= saveRecentSongLastWrittenSeq) {
+                            return@withLock // 过期保存:更新的快照已落盘,这笔作废
+                        }
+                        // Skip while the playing song is unknown or the queue is mid-rebuild:
+                        // updateCatalog clears listTracks and re-inserts the current track only at
+                        // the end, so saving in that window persists a queue missing the current
+                        // track (plus a blank media id), which desyncs the next restore.
+                        // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
+                        // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
+                        // 恢复时旧曲被前插成混入队列(2026-09-29 实证的拼接队列即此),等下一个
+                        // 一致状态再存。
+                        // ⚠️ 校验与落盘必须吃同一份快照:下方有两个 DataStore 挂起点,校验后
+                        // 协程可能挂起很久,期间换队/重建把 listTracks 清空或截成分块回填的
+                        // 半截——恢复执行时再读 queueData 会把不完整队列存进 DB(实测存过
+                        // 仅 1-2 首的快照,"保存撞重建窗口存不完整队列"的终因)。单读快照后,
+                        // 落盘的永远是通过校验的那一份;身份三键+纪元同快照取,不产生新旧混搭对。
+                        val snapshot = queueData.value
+                        val snapshotTracks = snapshot.data.listTracks
+                        val videoId = nowPlayingState.value.songEntity?.videoId
+                        if (videoId != null &&
+                            snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
+                            snapshotTracks.any { it.videoId == videoId }
+                        ) {
+                            dataStoreManager.saveRecentSong(
+                                videoId,
+                                savedPosition,
+                            )
+                            dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
+                            dataStoreManager.setSavedQueueIdentity(
+                                playlistId = snapshot.data.playlistId ?: "",
+                                playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                                continuation = snapshot.data.continuation,
+                                // 纪元随身份同批原子写:恢复时按持久值还原,不按现存曲目
+                                // 重算(云盘歌被移光只剩普通歌的队列,重算会把纪元翻回
+                                // 旧快照模式,普通歌重启后重新受云盘菜单门控)
+                                cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
+                            )
+                            Logger.d("Check saved", savedTitle)
+                            Logger.w(TAG, "Check recover queue size: ${snapshotTracks.size}")
+                            songRepository.recoverQueue(ArrayList(snapshotTracks))
+                            saveRecentSongLastWrittenSeq = seq
+                        }
+                        }
                 }
             }
         if (runBlocking) {
@@ -3269,6 +3276,12 @@ internal class MediaServiceHandlerImpl(
                     continuation = dataStoreManager.continuationFromSaved.first().ifEmpty { null },
                 ),
             )
+            // 纪元按保存时的持久值还原(setQueueData 的按曲目重算对恢复场景是错的:
+            // 标记纪元队列的云盘歌被移光只剩普通歌时,重算会把纪元翻回旧快照模式,
+            // 普通歌重启后重新受云盘菜单门控);旧数据没写过纪元键→false=旧快照,
+            // 与更早保存全不带标记的事实自洽
+            val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
+            _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
             // Playing is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it. The flag is re-read at each use
             // because a resumption request can arrive while the reads above are still running.

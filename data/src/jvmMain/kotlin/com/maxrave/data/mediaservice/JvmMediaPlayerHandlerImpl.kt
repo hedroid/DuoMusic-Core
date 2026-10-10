@@ -2935,48 +2935,50 @@ class JvmMediaPlayerHandlerImpl(
 
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
         val seq = saveRecentSongSeq.incrementAndGet()
+        // player 状态先在调用线程读(同 android 端);锁段整体挪 IO,防持锁协程在
+        // 主线程作用域挂起后与 release() 的 runBlocking 互等死锁
+        val savedPosition = player.contentPosition
+        val savedTitle = player.currentMediaItem?.metadata?.title.toString()
         val unit =
             suspend {
-                saveRecentSongMutex.withLock {
-                    if (seq <= saveRecentSongLastWrittenSeq) {
-                        return@withLock // 过期保存:更新的快照已落盘,这笔作废
-                    }
-                    // Skip while the playing song is unknown or the queue is mid-rebuild:
-                    // updateCatalog clears listTracks and re-inserts the current track only at
-                    // the end, so saving in that window persists a queue missing the current
-                    // track (plus a blank media id), which desyncs the next restore.
-                    // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
-                    // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
-                    // 恢复时旧曲被前插成混入队列,等下一个一致状态再存(android 端同修)。
-                    // ⚠️ 校验与落盘必须吃同一份快照(同 android 端):校验后有 DataStore
-                    // 挂起点,期间换队/重建把 listTracks 清空/截半,恢复读会存不完整队列。
-                    val snapshot = queueData.value
-                    val snapshotTracks = snapshot.data.listTracks
-                    val videoId = nowPlayingState.value.songEntity?.videoId
-                    if (videoId != null &&
-                        snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
-                        snapshotTracks.any { it.videoId == videoId }
-                    ) {
-                        dataStoreManager.saveRecentSong(
-                            videoId,
-                            player.contentPosition,
-                        )
-                        dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
-                        dataStoreManager.setSavedQueueIdentity(
-                            playlistId = snapshot.data.playlistId ?: "",
-                            playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                            continuation = snapshot.data.continuation,
-                        )
-                        Logger.d(
-                            "Check saved",
-                            player.currentMediaItem
-                                ?.metadata
-                                ?.title
-                                .toString(),
-                        )
-                        Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
-                        songRepository.recoverQueue(ArrayList(snapshotTracks))
-                        saveRecentSongLastWrittenSeq = seq
+                withContext(Dispatchers.IO) {
+                    saveRecentSongMutex.withLock {
+                        if (seq <= saveRecentSongLastWrittenSeq) {
+                            return@withLock // 过期保存:更新的快照已落盘,这笔作废
+                        }
+                        // Skip while the playing song is unknown or the queue is mid-rebuild:
+                        // updateCatalog clears listTracks and re-inserts the current track only at
+                        // the end, so saving in that window persists a queue missing the current
+                        // track (plus a blank media id), which desyncs the next restore.
+                        // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
+                        // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
+                        // 恢复时旧曲被前插成混入队列,等下一个一致状态再存(android 端同修)。
+                        // ⚠️ 校验与落盘必须吃同一份快照(同 android 端):校验后有 DataStore
+                        // 挂起点,期间换队/重建把 listTracks 清空/截半,恢复读会存不完整队列。
+                        val snapshot = queueData.value
+                        val snapshotTracks = snapshot.data.listTracks
+                        val videoId = nowPlayingState.value.songEntity?.videoId
+                        if (videoId != null &&
+                            snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
+                            snapshotTracks.any { it.videoId == videoId }
+                        ) {
+                            dataStoreManager.saveRecentSong(
+                                videoId,
+                                savedPosition,
+                            )
+                            dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
+                            dataStoreManager.setSavedQueueIdentity(
+                                playlistId = snapshot.data.playlistId ?: "",
+                                playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                                continuation = snapshot.data.continuation,
+                                // 纪元随身份同批原子写,恢复时按持久值还原(同 android 端)
+                                cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
+                            )
+                            Logger.d("Check saved", savedTitle)
+                            Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
+                            songRepository.recoverQueue(ArrayList(snapshotTracks))
+                            saveRecentSongLastWrittenSeq = seq
+                        }
                     }
                 }
             }
@@ -3168,6 +3170,10 @@ class JvmMediaPlayerHandlerImpl(
                     continuation = dataStoreManager.continuationFromSaved.first().ifEmpty { null },
                 ),
             )
+            // 纪元按保存时的持久值还原(同 android 端:setQueueData 按曲目重算对恢复
+            // 场景是错的,云盘歌被移光的标记纪元队列会被翻回旧快照模式)
+            val savedFlagEra = dataStoreManager.savedQueueCloudDiskFlagEra.first()
+            _queueData.update { it.copy(data = it.data.copy(cloudDiskFlagEra = savedFlagEra)) }
             // playWhenReady is the whole difference: the track starts loading (and so reaches
             // BUFFERING) right here, before the queue behind it, and the seek below then lands
             // it on the saved index and position.

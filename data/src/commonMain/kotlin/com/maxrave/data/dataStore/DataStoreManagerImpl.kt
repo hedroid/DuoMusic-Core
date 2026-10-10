@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.maxrave.common.SELECTED_LANGUAGE
 import com.maxrave.common.SUPPORTED_LANGUAGE
@@ -385,17 +386,24 @@ internal class DataStoreManagerImpl(
             preferences[FROM_SAVED_CONTINUATION] ?: ""
         }
 
+    override val savedQueueCloudDiskFlagEra: Flow<Boolean> =
+        settingsDataStore.data.map { preferences ->
+            preferences[FROM_SAVED_CLOUD_FLAG_ERA] ?: false
+        }
+
     override suspend fun setSavedQueueIdentity(
         playlistId: String,
         playlistType: String,
         continuation: String?,
+        cloudDiskFlagEra: Boolean,
     ) {
-        // 单 edit 原子写三键,恢复侧读到的永远是同一批保存的完整身份
+        // 单 edit 原子写四键(三键+云盘标记纪元),恢复侧读到的永远是同一批保存的完整身份
         withContext(Dispatchers.IO) {
             settingsDataStore.edit { settings ->
                 settings[FROM_SAVED_PLAYLIST_ID] = playlistId
                 settings[FROM_SAVED_PLAYLIST_TYPE] = playlistType
                 settings[FROM_SAVED_CONTINUATION] = continuation ?: ""
+                settings[FROM_SAVED_CLOUD_FLAG_ERA] = cloudDiskFlagEra
             }
         }
     }
@@ -2181,6 +2189,7 @@ internal class DataStoreManagerImpl(
         val FROM_SAVED_PLAYLIST_ID = stringPreferencesKey("from_saved_playlist_id")
         val FROM_SAVED_PLAYLIST_TYPE = stringPreferencesKey("from_saved_playlist_type")
         val FROM_SAVED_CONTINUATION = stringPreferencesKey("from_saved_continuation")
+        val FROM_SAVED_CLOUD_FLAG_ERA = booleanPreferencesKey("from_saved_cloud_flag_era")
 
         val KILL_SERVICE_ON_EXIT = stringPreferencesKey("kill_service_on_exit")
         val CROSSFADE_ENABLED = stringPreferencesKey("crossfade_enabled")
