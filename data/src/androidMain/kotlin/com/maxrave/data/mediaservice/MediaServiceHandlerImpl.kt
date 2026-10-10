@@ -3017,13 +3017,15 @@ internal class MediaServiceHandlerImpl(
                             playlistId = snapshot.data.playlistId ?: "",
                             playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
                             continuation = snapshot.data.continuation,
-                            // 纪元+回填出处随身份同批原子写:恢复时按持久值还原,不按现存曲目
-                            // 重算(云盘歌被移光只剩普通歌的队列,重算会把纪元翻回
-                            // 旧快照模式,普通歌重启后重新受云盘菜单门控);回填出处
-                            // 跨重启跟着走——回填标记经一次保存落盘后,下轮恢复仍能
-                            // 读回"这些标记不是页面出处"的事实,删除入口持续抑制
+                            // 纪元+回填出处+原始行注册表随身份同批原子写:恢复时按持久值
+                            // 还原,不按现存曲目重算(云盘歌被移光只剩普通歌的队列,重算会把
+                            // 纪元翻回旧快照模式,普通歌重启后重新受云盘菜单门控);回填出处
+                            // 跨重启跟着走——回填标记经一次保存落盘后,下轮恢复仍能读回
+                            // "这些标记不是页面出处"的事实,删除入口持续抑制;注册表同样
+                            // 持久——上一轮会话插入并保存的普通歌永远在表外
                             cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
                             cloudDiskRestoreBackfilled = snapshot.data.cloudDiskRestoreBackfilled,
+                            cloudDiskRestoredOriginalIds = snapshot.data.cloudDiskRestoredOriginalIds,
                         )
                             Logger.d("Check saved", savedTitle)
                             Logger.w(TAG, "Check recover queue size: ${snapshotTracks.size}")
@@ -3296,9 +3298,15 @@ internal class MediaServiceHandlerImpl(
                 } else {
                     listTracks
                 }
+            // 原始行注册表:优先吃持久值(上一轮会话插入并保存的普通歌在表外,跨重启
+            // 不被重新纳入"原始行");只有首次恢复(键缺席)按"整队=原始行"建档
             val restoredOriginalIds =
                 if (restoreLegacyCloudQueue) {
-                    restoredTracks.map { it.videoId }.toSet()
+                    dataStoreManager.savedQueueCloudDiskOriginalIds.first()
+                        .takeIf { it.isNotEmpty() }
+                        ?.split(',')
+                        ?.toSet()
+                        ?: restoredTracks.map { it.videoId }.toSet()
                 } else {
                     emptySet()
                 }

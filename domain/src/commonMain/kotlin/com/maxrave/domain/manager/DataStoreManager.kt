@@ -130,12 +130,19 @@ interface DataStoreManager {
      *  不可逆的"从云盘中删除"入口据此抑制;从云盘页重新起播后的保存会写 false */
     val savedQueueCloudDiskBackfilled: Flow<Boolean>
 
+    /** 旧快照恢复时的原始行注册表(与纪元同批原子写,逗号分隔 videoId,空=未写过):
+     *  恢复那一刻就在队列里的行。恢复优先吃持久值——上一轮会话插入并保存的普通歌
+     *  在表外,跨重启不再被重新纳入"原始行"而吃云盘菜单门控;只有首次恢复(键缺席)
+     *  才按"整队=原始行"建档。云盘页重载后的保存写空(纪元队列不消费注册表) */
+    val savedQueueCloudDiskOriginalIds: Flow<String>
+
     suspend fun setSavedQueueIdentity(
         playlistId: String,
         playlistType: String,
         continuation: String?,
         cloudDiskFlagEra: Boolean = false,
         cloudDiskRestoreBackfilled: Boolean = false,
+        cloudDiskRestoredOriginalIds: Set<String> = emptySet(),
     )
 
     val sendBackToGoogle: Flow<String>

@@ -2976,9 +2976,10 @@ class JvmMediaPlayerHandlerImpl(
                             playlistId = snapshot.data.playlistId ?: "",
                             playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
                             continuation = snapshot.data.continuation,
-                            // 纪元+回填出处随身份同批原子写(同 android 端)
+                            // 纪元+回填出处+原始行注册表随身份同批原子写(同 android 端)
                             cloudDiskFlagEra = snapshot.data.cloudDiskFlagEra,
                             cloudDiskRestoreBackfilled = snapshot.data.cloudDiskRestoreBackfilled,
+                            cloudDiskRestoredOriginalIds = snapshot.data.cloudDiskRestoredOriginalIds,
                         )
                             Logger.d("Check saved", savedTitle)
                             Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
@@ -3184,7 +3185,11 @@ class JvmMediaPlayerHandlerImpl(
                 }
             val restoredOriginalIds =
                 if (restoreLegacyCloudQueue) {
-                    restoredTracks.map { it.videoId }.toSet()
+                    dataStoreManager.savedQueueCloudDiskOriginalIds.first()
+                        .takeIf { it.isNotEmpty() }
+                        ?.split(',')
+                        ?.toSet()
+                        ?: restoredTracks.map { it.videoId }.toSet()
                 } else {
                     emptySet()
                 }
