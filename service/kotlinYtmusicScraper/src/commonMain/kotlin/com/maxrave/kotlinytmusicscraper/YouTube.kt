@@ -362,42 +362,33 @@ class YouTube {
     ): Result<AlbumPage> =
         runCatching {
             val response = ytMusic.browse(WEB_REMIX, browseId).body<BrowseResponse>()
+            // 单曲/老旧发行页常缺 microformat、艺人 strapline、缩略图等形状——原先三处 !!
+            // 与依赖其智能转换的裸链在这种页面上直接 NPE(release R8 把判空改写成 getClass()
+            // 惯用法,报"Attempt to invoke ... getClass()"后整页变错误 toast;2026-10-10
+            // 通知页点 Aqua 单曲即此)。全部放宽为可空回退:字段缺失时页面仍可渲染。
+            val header =
+                response.contents
+                    ?.twoColumnBrowseResultsRenderer
+                    ?.tabs
+                    ?.firstOrNull()
+                    ?.tabRenderer
+                    ?.content
+                    ?.sectionListRenderer
+                    ?.contents
+                    ?.firstOrNull()
+                    ?.musicResponsiveHeaderRenderer
             val playlistId =
                 response.microformat
                     ?.microformatDataRenderer
                     ?.urlCanonical
-                    ?.substringAfterLast('=')!!
+                    ?.substringAfterLast('=') ?: ""
             val albumItem =
                 AlbumItem(
                     browseId = browseId,
                     playlistId = playlistId,
-                    title =
-                        response.contents
-                            ?.twoColumnBrowseResultsRenderer
-                            ?.tabs
-                            ?.firstOrNull()
-                            ?.tabRenderer
-                            ?.content
-                            ?.sectionListRenderer
-                            ?.contents
-                            ?.firstOrNull()
-                            ?.musicResponsiveHeaderRenderer
-                            ?.title
-                            ?.runs
-                            ?.firstOrNull()
-                            ?.text ?: "",
+                    title = header?.title?.runs?.firstOrNull()?.text ?: "",
                     artists =
-                        response.contents
-                            ?.twoColumnBrowseResultsRenderer
-                            ?.tabs
-                            ?.firstOrNull()
-                            ?.tabRenderer
-                            ?.content
-                            ?.sectionListRenderer
-                            ?.contents
-                            ?.firstOrNull()
-                            ?.musicResponsiveHeaderRenderer
-                            ?.straplineTextOne
+                        header?.straplineTextOne
                             ?.runs
                             ?.oddElements()
                             ?.map {
@@ -405,43 +396,19 @@ class YouTube {
                                     name = it.text,
                                     id = it.navigationEndpoint?.browseEndpoint?.browseId,
                                 )
-                            }!!,
-                    year =
-                        response.contents.twoColumnBrowseResultsRenderer.tabs
-                            .firstOrNull()
-                            ?.tabRenderer
-                            ?.content
-                            ?.sectionListRenderer
-                            ?.contents
-                            ?.firstOrNull()
-                            ?.musicResponsiveHeaderRenderer
-                            ?.subtitle
-                            ?.runs
-                            // "Single • 2016" in English, "单曲 • 2016年" in Chinese — the year
-                            // is not always the last run, so scan for whichever run parses.
-                            ?.mapNotNull { it.text.parseYear() }
-                            ?.firstOrNull(),
-                    thumbnail =
-                        response.contents.twoColumnBrowseResultsRenderer.tabs
-                            .firstOrNull()
-                            ?.tabRenderer
-                            ?.content
-                            ?.sectionListRenderer
-                            ?.contents
-                            ?.firstOrNull()
-                            ?.musicResponsiveHeaderRenderer
-                            ?.thumbnail
-                            ?.musicThumbnailRenderer
-                            ?.getThumbnailUrl()!!,
+                            },
+                    year = header?.subtitle?.runs?.mapNotNull { it.text.parseYear() }?.firstOrNull(),
+                    thumbnail = header?.thumbnail?.musicThumbnailRenderer?.getThumbnailUrl() ?: "",
                 )
-            AlbumPage(
+            val albumPage =
+                AlbumPage(
                 album = albumItem,
                 songs =
                     if (withSongs) {
                         albumSongs(
                             response.contents
-                                .twoColumnBrowseResultsRenderer
-                                .secondaryContents
+                                ?.twoColumnBrowseResultsRenderer
+                                ?.secondaryContents
                                 ?.sectionListRenderer
                                 ?.contents
                                 ?.firstOrNull()
@@ -454,48 +421,17 @@ class YouTube {
                     },
                 description =
                     getDescriptionAlbum(
-                        response.contents.twoColumnBrowseResultsRenderer.tabs
-                            .firstOrNull()
-                            ?.tabRenderer
-                            ?.content
-                            ?.sectionListRenderer
-                            ?.contents
-                            ?.firstOrNull()
-                            ?.musicResponsiveHeaderRenderer
-                            ?.description
+                        header?.description
                             ?.musicDescriptionShelfRenderer
                             ?.description
                             ?.runs,
                     ),
-                duration =
-                    response.contents.twoColumnBrowseResultsRenderer.tabs
-                        .firstOrNull()
-                        ?.tabRenderer
-                        ?.content
-                        ?.sectionListRenderer
-                        ?.contents
-                        ?.firstOrNull()
-                        ?.musicResponsiveHeaderRenderer
-                        ?.secondSubtitle
-                        ?.runs
-                        ?.get(2)
-                        ?.text ?: "",
-                thumbnails =
-                    response.contents.twoColumnBrowseResultsRenderer.tabs
-                        .firstOrNull()
-                        ?.tabRenderer
-                        ?.content
-                        ?.sectionListRenderer
-                        ?.contents
-                        ?.firstOrNull()
-                        ?.musicResponsiveHeaderRenderer
-                        ?.thumbnail
-                        ?.musicThumbnailRenderer
-                        ?.thumbnail,
+                duration = header?.secondSubtitle?.runs?.getOrNull(2)?.text ?: "",
+                thumbnails = header?.thumbnail?.musicThumbnailRenderer?.thumbnail,
                 otherVersion =
                     response.contents
-                        .twoColumnBrowseResultsRenderer
-                        .secondaryContents
+                        ?.twoColumnBrowseResultsRenderer
+                        ?.secondaryContents
                         ?.sectionListRenderer
                         ?.contents
                         ?.lastOrNull()
@@ -507,6 +443,13 @@ class YouTube {
                             )
                         } ?: emptyList(),
             )
+            // YT 风控/降级会回"空壳页"(browseId 有效但 header/曲目全无)。放出去会渲染成
+            // "0 音轨"的空壳成功态,还挡住上层 Room 缓存兜底——按失败上报,让 UI 落回
+            // 离线缓存;真专辑页必有标题与曲目,不会误伤。
+            if (albumPage.album.title.isBlank() || (withSongs && albumPage.songs.isEmpty())) {
+                error("degraded album response: $browseId")
+            }
+            albumPage
         }
 
     private fun getDescriptionAlbum(runs: List<Run>?): String {

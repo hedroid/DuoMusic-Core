@@ -162,7 +162,12 @@ internal class AlbumRepositoryImpl(
                         .getAlbumBrowseData(browseId)
                         .fold(
                             onSuccess = { emit(Resource.Success(it)) },
-                            onFailure = { emit(Resource.Error(it.message ?: "netease album error")) },
+                            onFailure = {
+                                // NPE 探针(2026-10-10 通知页点专辑封面报 getClass() NPE):全堆栈进 logcat
+                                Logger.w("AlbumProbe", "netease album fail id=$browseId: ${it.message}")
+                                it.printStackTrace()
+                                emit(Resource.Error(it.message ?: "netease album error"))
+                            },
                         )
                     return@flow
                 }
@@ -171,6 +176,9 @@ internal class AlbumRepositoryImpl(
                     .onSuccess { result ->
                         emit(Resource.Success(parseAlbumData(result)))
                     }.onFailure { e ->
+                        // NPE 探针(2026-10-10 通知页点专辑封面报 getClass() NPE):全堆栈进 logcat
+                        Logger.w("AlbumProbe", "yt album fail id=$browseId: ${e.message}")
+                        e.printStackTrace()
                         Logger.d(TAG, "getAlbumData -> error: ${e.message}")
                         emit(Resource.Error(e.message.toString()))
                     }
