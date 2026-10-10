@@ -72,7 +72,7 @@ fun SongEntity.toMediaItem(): MediaItem {
 @UnstableApi
 fun Track.toMediaItem(): MediaItem {
     var thumbUrl =
-        this.thumbnails?.last()?.url
+        this.thumbnails?.lastOrNull()?.url
             ?: "http://i.ytimg.com/vi/${this.videoId}/maxresdefault.jpg"
     if (thumbUrl.contains("w120")) {
         thumbUrl = Regex("([wh])120").replace(thumbUrl, "$1544")
@@ -80,9 +80,9 @@ fun Track.toMediaItem(): MediaItem {
     val artistName: String = this.artists.toListName().connectArtists()
     val isSong =
         (
-            this.thumbnails?.last()?.height != 0 &&
-                this.thumbnails?.last()?.height == this.thumbnails?.last()?.width &&
-                this.thumbnails?.last()?.height != null
+            this.thumbnails?.lastOrNull()?.height != 0 &&
+                this.thumbnails?.lastOrNull()?.height == this.thumbnails?.lastOrNull()?.width &&
+                this.thumbnails?.lastOrNull()?.height != null
         ) &&
             (!thumbUrl.contains("hq720") && !thumbUrl.contains("maxresdefault"))
     return MediaItem
