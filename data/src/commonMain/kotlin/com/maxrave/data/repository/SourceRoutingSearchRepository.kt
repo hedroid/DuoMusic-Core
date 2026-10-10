@@ -4,9 +4,9 @@
  * SearchRepository,对音源无感知。
  *
  * - 搜索历史两源共用:搜索词无源属性,不加 source 字段(无 db 迁移)。
- * - 网易不支持的能力(video/album/podcast/featuredPlaylist)发空 Success,
- *   searchAll() 的 7 个并行 job 零改动,空类在 ALL 混排里自然消失;
- *   UI 侧 chips 按 selectedSource 过滤,这些 tab 在网易源下不可见。
+ * - 网易不支持的能力(featuredPlaylist)发空 Success,searchAll() 的 7 个并行 job 零改动,
+ *   空类在 ALL 混排里自然消失;UI 侧 chips 按 selectedSource 过滤,该 tab 在网易源下不可见。
+ *   video/podcast 已接网易侧(MV=type1004→playMv,电台=type1009→电台详情页)。
  * - 网易侧单发取 first 形状(YT 侧 emitAll 透传多发射语义)。
  */
 package com.maxrave.data.repository
@@ -70,7 +70,11 @@ internal class SourceRoutingSearchRepository(
     override fun getSearchDataVideo(query: String): Flow<Resource<ArrayList<VideosResult>>> =
         flow {
             if (isNetease()) {
-                emit(Resource.Success(arrayListOf())) // MV 播放链路未接,tab 已隐藏
+                // MV(cloudsearch type=1004):videoId=NETEASE_MV_ 哨兵,UI 点击分流 playMv
+                netease.searchMvsResult(query).fold(
+                    onSuccess = { emit(Resource.Success(it)) },
+                    onFailure = { emit(Resource.Error(it.message ?: "netease search error")) },
+                )
             } else {
                 emitAll(youtube.getSearchDataVideo(query))
             }
@@ -79,7 +83,11 @@ internal class SourceRoutingSearchRepository(
     override fun getSearchDataPodcast(query: String): Flow<Resource<ArrayList<PlaylistsResult>>> =
         flow {
             if (isNetease()) {
-                emit(Resource.Success(arrayListOf())) // 播客播放链路未接,tab 已隐藏
+                // 电台(cloudsearch type=1009):resultType=NeteaseRadio,UI 点击进电台详情页
+                netease.searchRadiosResult(query).fold(
+                    onSuccess = { emit(Resource.Success(it)) },
+                    onFailure = { emit(Resource.Error(it.message ?: "netease search error")) },
+                )
             } else {
                 emitAll(youtube.getSearchDataPodcast(query))
             }

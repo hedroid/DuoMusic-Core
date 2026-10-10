@@ -10,6 +10,7 @@ import com.maxrave.common.NETEASE_PLAYLIST_PAGE_PREFIX
 import com.maxrave.common.NETEASE_PLAYLIST_PAGE_SIZE
 import com.maxrave.common.NETEASE_CLOUD_DISK_PAGE_SIZE
 import com.maxrave.common.NETEASE_MV_MEDIA_ID_PREFIX
+import com.maxrave.common.NETEASE_RADIO_SEARCH_RESULT_TYPE
 import com.maxrave.domain.data.model.browse.album.Track
 import com.maxrave.domain.data.model.home.BrowsePage
 import com.maxrave.domain.data.model.home.Content
@@ -43,6 +44,7 @@ import com.maxrave.domain.data.model.searchResult.songs.Album
 import com.maxrave.domain.data.model.searchResult.songs.Artist
 import com.maxrave.domain.data.model.searchResult.songs.SongsResult
 import com.maxrave.domain.data.model.searchResult.songs.Thumbnail
+import com.maxrave.domain.data.model.searchResult.videos.VideosResult
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.HomeRepository
 import com.maxrave.domain.utils.Resource
@@ -154,7 +156,9 @@ import com.maxrave.netease.radarPlaylists
 import com.maxrave.netease.recommendDjRadios
 import com.maxrave.netease.recommendPodcastPrograms
 import com.maxrave.netease.searchArtists
+import com.maxrave.netease.searchDjRadios
 import com.maxrave.netease.searchHot
+import com.maxrave.netease.searchMvs
 import com.maxrave.netease.searchPlaylists
 import com.maxrave.netease.searchSongs
 import com.maxrave.netease.searchSuggest
@@ -1785,6 +1789,20 @@ class NeteaseRepositoryImpl(
     suspend fun searchArtistsResult(query: String): Result<ArrayList<ArtistsResult>> =
         client.searchArtists(query).map { r -> ArrayList(r.items.map { it.toArtistsResult() }) }
 
+    /** 搜 MV → VideosResult(视频 tab):videoId=NETEASE_MV_ 哨兵,UI 点击按前缀分流到
+     *  playMv 单曲队列(哨兵队列 loadMore 即止,与歌手页 MV 货架同链路)。
+     *  type=1004 分页健康(mvCount+offset),但视频 tab 与 YT 同为一次拉完(30 条),不做分页。 */
+    suspend fun searchMvsResult(query: String): Result<ArrayList<VideosResult>> =
+        client.searchMvs(query, limit = NETEASE_SEARCH_PAGE_SIZE).map { r ->
+            ArrayList(r.items.map { it.toVideosResult() })
+        }
+
+    /** 搜电台 → PlaylistsResult(播客 tab):resultType=NETEASE_RADIO_SEARCH_RESULT_TYPE,
+     *  UI 点击按它进电台详情页(browseId=纯数字电台 id)。type=1009 服务端硬上限 10 条
+     *  且 offset 回空(探针实证),一次拉完即全部结果。 */
+    suspend fun searchRadiosResult(query: String): Result<ArrayList<PlaylistsResult>> =
+        client.searchDjRadios(query).map { r -> ArrayList(r.items.map { it.toPlaylistsResult() }) }
+
     /** 搜索建议:歌曲+艺人实体卡(该端点无词联想,queries 恒空) */
     suspend fun searchSuggestData(query: String): Result<SearchSuggestions> =
         client.searchSuggest(query).map { s ->
@@ -2623,6 +2641,46 @@ internal fun NeteaseMvDetail.toMvTrack(): com.maxrave.domain.data.model.browse.a
         category = null,
         feedbackTokens = null,
         resultType = "mv",
+    )
+
+/** MV 摘要 → 搜索行(VideosResult):与 toMvTrack 同款 16:9 缩略图(width≠height 驱动
+ *  视频层判 VIDEO)+ NETEASE_MV_ 哨兵,UI 点击按哨兵分流到 playMv;views 沿用 playCount
+ *  裸 toString(搜索行不渲染该字段,渲染时须先接 formatCompactCount)。 */
+internal fun NeteaseMv.toVideosResult(): VideosResult =
+    VideosResult(
+        artists =
+            listOfNotNull(
+                artistId?.let { aid -> Artist(id = aid.toString(), name = artistName ?: "") },
+            ),
+        category = null,
+        duration = durationMs.toMinutesSeconds(),
+        durationSeconds = (durationMs / 1000).toInt(),
+        resultType = "mv",
+        thumbnails =
+            coverUrl?.let { url ->
+                listOf(Thumbnail(height = 360, url = url, width = 640))
+            },
+        title = name,
+        videoId = "$NETEASE_MV_MEDIA_ID_PREFIX$id",
+        videoType = null,
+        views = playCount?.toString(),
+        year = "",
+    )
+
+/** 电台 → 搜索行(PlaylistsResult):resultType=NETEASE_RADIO_SEARCH_RESULT_TYPE,
+ *  点击按它进电台详情页;coverUrl 走 toNeteaseCoverUrl 整段换 query(方形 500)。 */
+internal fun NeteaseDjRadio.toPlaylistsResult(): PlaylistsResult =
+    PlaylistsResult(
+        author = djNickname ?: "",
+        browseId = id.toString(),
+        category = category ?: "",
+        itemCount = programCount.toString(),
+        resultType = NETEASE_RADIO_SEARCH_RESULT_TYPE,
+        thumbnails =
+            coverUrl.toNeteaseCoverUrl(500)?.let { url ->
+                listOf(Thumbnail(height = 500, url = url, width = 500))
+            } ?: emptyList(),
+        title = name,
     )
 
 /** 网易封面统一到清晰度安全的尺寸。服务端 URL 常自带 imageView/watermark/thumbnail 处理链

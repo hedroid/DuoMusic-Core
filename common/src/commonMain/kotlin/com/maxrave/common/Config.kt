@@ -724,6 +724,13 @@ const val NETEASE_PODCAST_RADIO_QUEUE_PREFIX = "NETEASE_PODCAST_RADIO_"
  */
 const val NETEASE_MV_MEDIA_ID_PREFIX = "NETEASE_MV_"
 
+/**
+ * 网易电台搜索结果行的 resultType 标记（cloudsearch type=1009 → PlaylistsResult）：
+ * 搜索页点击按它分流到 [电台详情页]，区别于 YT 播客行的 "Podcast"→PodcastDestination。
+ * 网易歌单行的 resultType 是普通歌单标记（非 "Podcast"、非本值）→PlaylistDestination。
+ */
+const val NETEASE_RADIO_SEARCH_RESULT_TYPE = "NeteaseRadio"
+
 /** 网易歌单每页曲目数（playlistDetail 拿 trackIds 后 songDetail 分片的批大小） */
 const val NETEASE_PLAYLIST_PAGE_SIZE = 500
 
