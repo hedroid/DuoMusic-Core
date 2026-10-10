@@ -315,6 +315,19 @@ data class QueueData(
         // 开关赋予的，UI 无尽开关保持可关(关=裁回原队列)；原生电台(见下)则锁定为开。
         // 不持久化——重启后 restore 快照本就丢失，转换态随之失效，行为与显示一致。
         val radioConvertedFromQueue: Boolean = false,
+        /**
+         * 云盘队列的"标记纪元"：setQueueData 时按"曲目里是否任一行带
+         * neteaseCloudDiskMounted 标记"定型，此后续批追加/移除歌曲都不翻动
+         * （Data.copy 透传）。true=标记纪元队列——无标记的行是后来插入的普通歌；
+         * false=升级前保存的旧快照(标记集体缺席)——无标记的行按云盘歌对待。
+         * 不能在 UI 侧按当前曲目现算 any{标记}：旧快照经分页续批追加带标记的
+         * 云盘行后 any 翻 true，旧云盘行会被误判成插入的普通歌(私人文件门控
+         * 整组失效)；反向同理，云盘歌被移光只剩普通歌时 any 翻 false 会把普通
+         * 歌误判成云盘歌。纪元只描述"这队队列以什么形态建立"，与当下内容无关。
+         * 不持久化——恢复时 setQueueData 按恢复行重新定型(旧快照全无标记→
+         * false，语义自洽)。
+         */
+        val cloudDiskFlagEra: Boolean = false,
     ) {
         /**
          * 播客队列唯一判定:只认显式前缀。队列身份三键持久化(fd62b5a)后恢复路径

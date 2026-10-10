@@ -2274,7 +2274,9 @@ class JvmMediaPlayerHandlerImpl(
         endlessRestore = null
         _queueData.update {
             it.copy(
-                data = queueData,
+                // 云盘标记纪元在此定型(后续续批/移除不再翻动,见字段注释):UI 用它区分
+                // "无标记行=插入的普通歌"(纪元队列)与"无标记行=旧快照的云盘歌"(旧队列)
+                data = queueData.copy(cloudDiskFlagEra = queueData.listTracks.any { it.neteaseCloudDiskMounted != null }),
             )
         }
         // 播种会话级"已知不可播"注册表(getStreamInfo 单档优化的依据)。异步播种与首曲装载
@@ -2925,44 +2927,57 @@ class JvmMediaPlayerHandlerImpl(
 
     override fun getProgress(): Long = player.currentPosition
 
+    // 保存串行化+序列号丢弃过期写(android 端同款):并发保存调度乱序时防止旧快照
+    // 覆盖新落盘;跳过即跳过整笔(recentMediaId 与队列是同一笔一致快照)
+    private val saveRecentSongMutex = Mutex()
+    private val saveRecentSongSeq = java.util.concurrent.atomic.AtomicLong(0L)
+    private var saveRecentSongLastWrittenSeq = 0L // 仅 mutex 内读写
+
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
+        val seq = saveRecentSongSeq.incrementAndGet()
         val unit =
             suspend {
-                // Skip while the playing song is unknown or the queue is mid-rebuild:
-                // updateCatalog clears listTracks and re-inserts the current track only at
-                // the end, so saving in that window persists a queue missing the current
-                // track (plus a blank media id), which desyncs the next restore.
-                // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
-                // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
-                // 恢复时旧曲被前插成混入队列,等下一个一致状态再存(android 端同修)。
-                // ⚠️ 校验与落盘必须吃同一份快照(同 android 端):校验后有 DataStore
-                // 挂起点,期间换队/重建把 listTracks 清空/截半,恢复读会存不完整队列。
-                val snapshot = queueData.value
-                val snapshotTracks = snapshot.data.listTracks
-                val videoId = nowPlayingState.value.songEntity?.videoId
-                if (videoId != null &&
-                    snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
-                    snapshotTracks.any { it.videoId == videoId }
-                ) {
-                    dataStoreManager.saveRecentSong(
-                        videoId,
-                        player.contentPosition,
-                    )
-                    dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
-                    dataStoreManager.setSavedQueueIdentity(
-                        playlistId = snapshot.data.playlistId ?: "",
-                        playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
-                        continuation = snapshot.data.continuation,
-                    )
-                    Logger.d(
-                        "Check saved",
-                        player.currentMediaItem
-                            ?.metadata
-                            ?.title
-                            .toString(),
-                    )
-                    Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
-                    songRepository.recoverQueue(ArrayList(snapshotTracks))
+                saveRecentSongMutex.withLock {
+                    if (seq <= saveRecentSongLastWrittenSeq) {
+                        return@withLock // 过期保存:更新的快照已落盘,这笔作废
+                    }
+                    // Skip while the playing song is unknown or the queue is mid-rebuild:
+                    // updateCatalog clears listTracks and re-inserts the current track only at
+                    // the end, so saving in that window persists a queue missing the current
+                    // track (plus a blank media id), which desyncs the next restore.
+                    // "不在当前队列"同理跳过:换队后 setQueueData 已写入新 listTracks 而
+                    // songEntity 还是旧曲的窗口里落盘,会写出"新队列+旧曲 id"的错位对——
+                    // 恢复时旧曲被前插成混入队列,等下一个一致状态再存(android 端同修)。
+                    // ⚠️ 校验与落盘必须吃同一份快照(同 android 端):校验后有 DataStore
+                    // 挂起点,期间换队/重建把 listTracks 清空/截半,恢复读会存不完整队列。
+                    val snapshot = queueData.value
+                    val snapshotTracks = snapshot.data.listTracks
+                    val videoId = nowPlayingState.value.songEntity?.videoId
+                    if (videoId != null &&
+                        snapshot.queueState == QueueData.StateSource.STATE_INITIALIZED &&
+                        snapshotTracks.any { it.videoId == videoId }
+                    ) {
+                        dataStoreManager.saveRecentSong(
+                            videoId,
+                            player.contentPosition,
+                        )
+                        dataStoreManager.setPlaylistFromSaved(snapshot.data.playlistName ?: "")
+                        dataStoreManager.setSavedQueueIdentity(
+                            playlistId = snapshot.data.playlistId ?: "",
+                            playlistType = (snapshot.data.playlistType ?: PlaylistType.PLAYLIST).name,
+                            continuation = snapshot.data.continuation,
+                        )
+                        Logger.d(
+                            "Check saved",
+                            player.currentMediaItem
+                                ?.metadata
+                                ?.title
+                                .toString(),
+                        )
+                        Logger.w("SimpleMediaServiceHandler", "Check recover queue size: ${snapshotTracks.size}")
+                        songRepository.recoverQueue(ArrayList(snapshotTracks))
+                        saveRecentSongLastWrittenSeq = seq
+                    }
                 }
             }
         if (runBlocking) {
