@@ -153,7 +153,8 @@ suspend fun NeteaseClient.searchArtists(
 
 /** 搜 MV(cloudsearch type=1004;2026-10-10 探针实证:mvCount+offset 分页健康,条目字段
  *  cover/artistId/artistName/duration/playCount 与 [toMv] 兜底链兼容,artists[] 数组另带
- *  别名但不需要;与歌单/歌手同走 weapi 通道)。 */
+ *  别名但不需要;与歌单/歌手同走 weapi 通道)。业务码非 200 转 failure——HTTP 200 内含
+ *  业务拒绝(风控/参数)时 result 缺席,不校验会把失败误报成"无结果"。 */
 suspend fun NeteaseClient.searchMvs(
     keywords: String,
     limit: Int = 30,
@@ -170,6 +171,7 @@ suspend fun NeteaseClient.searchMvs(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=1004 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items = result?.array("mvs")?.mapNotNull { (it as? JsonObject)?.toMv() } ?: emptyList(),
@@ -180,7 +182,8 @@ suspend fun NeteaseClient.searchMvs(
 /** 搜电台(cloudsearch type=1009;2026-10-10 探针实证:**服务端硬上限 10 条且 offset>0
  *  一律回空**——"故事/音乐/FM"三个基数迥异的关键词全部恰好 10/10,djRadiosCount 只
  *  镜像返回条数,limit 低于 10 也回满 10)。一次调用即全部结果,别做分页。
- *  条目形状(picUrl/dj.nickname/desc/rcmdText/category)与 [toDjRadioOrNull] 兼容。 */
+ *  条目形状(picUrl/dj.nickname/desc/rcmdText)与 [toDjRadioOrNull] 兼容。
+ *  业务码非 200 转 failure,理由同 [searchMvs]。 */
 suspend fun NeteaseClient.searchDjRadios(
     keywords: String,
     limit: Int = 30,
@@ -197,6 +200,7 @@ suspend fun NeteaseClient.searchDjRadios(
                     "offset" to offset,
                 ),
             )
+        check((body["code"]?.nLong() ?: -1L) == 200L) { "cloudsearch/pc type=1009 code=${body["code"]}" }
         val result = body.obj("result")
         NeteaseSearchResult(
             items = result?.array("djRadios")?.mapNotNull { it.toDjRadioOrNull() } ?: emptyList(),

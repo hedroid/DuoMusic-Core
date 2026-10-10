@@ -14,8 +14,23 @@ class SearchMvRadioProbe3 {
     @Test
     fun probeTypedEndpoints() {
         val cookieFile = File("/tmp/netease_cookies.json")
+
+        // 匿名通道(不带 cookie):业务码校验上线后,登录前搜索也必须 code=200
+        val anonSb = StringBuilder()
+        kotlinx.coroutines.runBlocking {
+            val anon = NeteaseClient()
+            anon.searchMvs("周杰伦", limit = 5).fold(
+                onSuccess = { anonSb.appendLine("anon searchMvs: total=${it.totalCount} items=${it.items.size} first=${it.items.firstOrNull()?.name?.take(12)}") },
+                onFailure = { anonSb.appendLine("anon searchMvs FAILED: ${it.message?.take(80)}") },
+            )
+            anon.searchDjRadios("故事FM", limit = 5).fold(
+                onSuccess = { anonSb.appendLine("anon searchDjRadios: total=${it.totalCount} items=${it.items.size} first=${it.items.firstOrNull()?.name?.take(12)}") },
+                onFailure = { anonSb.appendLine("anon searchDjRadios FAILED: ${it.message?.take(80)}") },
+            )
+        }
         if (!cookieFile.exists()) {
-            println("skip: /tmp/netease_cookies.json not found")
+            println(anonSb)
+            File("/tmp/search_mv_radio_probe3_out.txt").writeText(anonSb.toString())
             return
         }
         val out = File("/tmp/search_mv_radio_probe3_out.txt")
@@ -56,7 +71,8 @@ class SearchMvRadioProbe3 {
                 onFailure = { sb.appendLine("searchDjRadios FAILED: ${it.message}") },
             )
 
-            out.writeText(sb.toString())
+            out.writeText(anonSb.toString() + "\n" + sb.toString())
+            println(anonSb)
             println(sb)
         }
     }
