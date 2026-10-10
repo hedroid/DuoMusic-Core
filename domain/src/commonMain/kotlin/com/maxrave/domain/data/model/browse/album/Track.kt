@@ -36,4 +36,14 @@ data class Track(
      * Defaulted 保证旧持久化队列 JSON 仍可解码。
      */
     val neteaseProgramId: Long? = null,
+    /**
+     * 网易云盘条目挂载态,仅云盘构造路径填充(null=非云盘条目):true=已匹配曲库
+     * (①完整元数据/②仅名字),false=私人文件(③未匹配,或 song 整个缺席走文件名
+     * 兜底)。显式标记而非 UI 侧形状推断——队列行的 artists 会被 catalog 重建给
+     * 空艺人行回填"Various Artists",私人文件的空艺人形状在重建后丢失,推断必漏;
+     * 标记随 Track.copy 存活重建、随序列化存活持久化。UI 侧两个消费点:播放页
+     * "从云盘删除"入口(非 null=确属云盘)与"加歌单"门控(false=私人文件置灰)。
+     * Defaulted 保证旧持久化队列 JSON(无此字段)仍可解码。
+     */
+    val neteaseCloudDiskMounted: Boolean? = null,
 )

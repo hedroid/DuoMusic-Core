@@ -1085,9 +1085,16 @@ class NeteaseRepositoryImpl(
                 // 为空,曲库功能(分享/点赞/电台等)对其关门。
                 tracks =
                     songs.map { song ->
+                        // 挂载标记按原始形状计算(剥 id 之前):③未匹配(ar 整个缺席或
+                        // song 缺席走文件名兜底,artists 恒空)=false,①②(有任何艺人
+                        // 名)=true。剥完 id 后③的空艺人形状会被队列 catalog 重建回填
+                        // "Various Artists",届时形状推断必漏——只有这个显式标记存活
+                        // (见 Track.neteaseCloudDiskMounted 注释)
+                        val mounted = song.artists.isNotEmpty()
                         song.toTrackPlaylist().let { t ->
                             val albumValid = (t.album?.id?.toLongOrNull() ?: 0L) > 0L
                             t.copy(
+                                neteaseCloudDiskMounted = mounted,
                                 artists =
                                     t.artists?.map { a ->
                                         if ((a.id?.toLongOrNull() ?: 0L) > 0L) a else a.copy(id = null)
