@@ -593,23 +593,8 @@ suspend fun NeteaseClient.playlistDetail(playlistId: Long): Result<Pair<NeteaseP
         pl.toPlaylist() to trackIds
     }
 
-suspend fun NeteaseClient.playlistTracks(
-    playlistId: Long,
-    limit: Int = 100,
-    offset: Int = 0,
-): Result<List<NeteaseSong>> =
-    runCatching {
-        val body =
-            callWeApi(
-                "/playlist/track/all",
-                mapOf(
-                    "id" to playlistId,
-                    "limit" to limit,
-                    "offset" to offset,
-                ),
-            )
-        body.array("songs")?.map { it.toSong() } ?: emptyList()
-    }
+// (2026-10-11 删除 playlistTracks:/playlist/track/all 端点恒 404 死透,仅存调用点已
+//  全部换 playlistTracksViaDetail;留着只会诱导未来误用+刷 QQQ 噪音)
 
 suspend fun NeteaseClient.userPlaylists(userId: Long): Result<List<NeteasePlaylist>> =
     runCatching {
@@ -1213,16 +1198,24 @@ suspend fun NeteaseClient.subscribePlaylist(
     subscribe: Boolean,
 ): Result<Boolean> =
     runCatching {
+        // 收藏分支按 Enhanced 形状带动态 token(来源生成失败→null→纯 eapi);
+        // 取消分支两样都不带(社区一致)
+        val token =
+            if (subscribe) {
+                antiCheatSource?.token(NeteaseAntiCheatSource.BUSINESS_KEY_PLAYLIST)
+            } else {
+                null
+            }
         val params =
             buildMap<String, Any?> {
                 put("id", playlistId)
-                if (subscribe) antiCheatToken?.let { put("checkToken", it) }
+                if (subscribe) token?.let { put("checkToken", it) }
             }
         val body =
             callEApi(
                 if (subscribe) "/playlist/subscribe" else "/playlist/unsubscribe",
                 params,
-                withAntiCheatToken = true,
+                antiCheatToken = token,
             )
         val code = (body["code"] as? JsonPrimitive)?.content
         if (code != "200") {

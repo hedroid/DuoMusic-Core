@@ -53,7 +53,10 @@ class SubscribeEapiProbe {
                 )
             if (!subOk) {
                 sb.appendLine("== retry SUB with community static token ==")
-                client.antiCheatToken = communityStaticToken
+                client.antiCheatSource =
+                    object : NeteaseAntiCheatSource {
+                        override suspend fun token(businessKey: String): String? = communityStaticToken
+                    }
                 subOk =
                     client.subscribePlaylist(pid, subscribe = true).fold(
                         { sb.appendLine("SUB(token) ok") ; true },
@@ -63,7 +66,7 @@ class SubscribeEapiProbe {
             kotlinx.coroutines.delay(1500)
             sb.appendLine("subscribed after SUB=${subscribedNow()}")
             // 还原:回到订阅前的状态(默认纯 eapi 形状,token 置空)
-            client.antiCheatToken = null
+            client.antiCheatSource = null
             val restoreSubscribe = before == "true"
             sb.appendLine("== restore (${if (restoreSubscribe) "re-subscribe" else "unsubscribe"}, plain eapi) ==")
             client.subscribePlaylist(pid, subscribe = restoreSubscribe).fold(
@@ -98,17 +101,22 @@ class SubscribeEapiProbe {
                     { "ERR ${it.message}" },
                 )
             suspend fun writeTagsRaw(extra: Map<String, Any?>, token: String? = null) {
-                client.antiCheatToken = token
+                client.antiCheatSource =
+                    token?.let {
+                        object : NeteaseAntiCheatSource {
+                            override suspend fun token(businessKey: String): String? = it
+                        }
+                    }
                 runCatching {
                     val r =
                         client.callEApi(
                             "/playlist/tags/update",
                             mapOf("id" to editPid.toString(), "tags" to "华语,流行") + extra,
-                            withAntiCheatToken = token != null,
+                            antiCheatToken = token,
                         )
                     sb.appendLine("tags write code=${r["code"]} msg=${r["message"]} extra=$extra token=${token != null}")
                 }.onFailure { sb.appendLine("tags write ERR ${it.message}") }
-                client.antiCheatToken = null
+                client.antiCheatSource = null
             }
             sb.appendLine("== tags variant A: plain ==")
             writeTagsRaw(emptyMap())

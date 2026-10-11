@@ -143,7 +143,7 @@ import com.maxrave.netease.uploadToCloudDisk
 import com.maxrave.netease.deleteCloudDiskSong
 import com.maxrave.netease.matchCloudDiskSong
 import com.maxrave.netease.playlistDetail
-import com.maxrave.netease.playlistTracks
+import com.maxrave.netease.NeteaseAntiCheatSource
 import com.maxrave.netease.playlistTracksViaDetail
 import com.maxrave.netease.songDetail
 import com.maxrave.netease.userLikedSongIds
@@ -380,6 +380,11 @@ class NeteaseRepositoryImpl(
             cookieProvider = { loadPersistedCookies() },
             cookieSaver = { cookies -> persistCookies(cookies) },
         )
+
+    /** 平台反作弊 token 来源注入(Android 宿主启动时装 WatchmanTokenSource;jvm/ios 不装=纯 eapi) */
+    fun installAntiCheatSource(source: NeteaseAntiCheatSource?) {
+        client.antiCheatSource = source
+    }
 
     override val isLoggedIn: Flow<Boolean> =
         dataStoreManager.neteaseCookie.map { it.isNotEmpty() && it != "{}" && it.contains("MUSIC_U") }
@@ -745,18 +750,13 @@ class NeteaseRepositoryImpl(
         return list.toPlaylistHomeItem("每日推荐歌单").also { dailyRowCache.set(it) }
     }
 
-    /** 私人雷达行(歌曲行):track/all 对雷达不稳定,双路兜底走带 n 的 detail 直取 */
+    /** 私人雷达行(歌曲行):track/all 端点已死(恒 404),直走带 n 的 detail 取曲目 */
     suspend fun getRadarSongsRow(force: Boolean = false): HomeItem? {
         radarSongsRowCache.get(force)?.let { return it }
-        val direct =
-            client.playlistTracks(NeteaseConstants.RADAR_PRIVATE_PLAYLIST_ID, limit = 30)
-                .getOrNull()
-                ?.takeIf { it.isNotEmpty() }
         val songs =
-            direct
-                ?: client.playlistTracksViaDetail(NeteaseConstants.RADAR_PRIVATE_PLAYLIST_ID, limit = 30).getOrNull().orEmpty()
-        if (direct == null && songs.isEmpty()) {
-            com.maxrave.logger.Logger.w("NeteaseHome", "radar songs: track/all and viaDetail both empty")
+            client.playlistTracksViaDetail(NeteaseConstants.RADAR_PRIVATE_PLAYLIST_ID, limit = 30).getOrNull().orEmpty()
+        if (songs.isEmpty()) {
+            com.maxrave.logger.Logger.w("NeteaseHome", "radar songs: viaDetail empty")
             return null
         }
         return songs.toSongHomeItem("私人雷达").also { radarSongsRowCache.set(it) }
@@ -1512,8 +1512,9 @@ class NeteaseRepositoryImpl(
     override suspend fun getPlaylistSongs(playlistId: String): Result<List<SongEntity>> {
         val id = playlistId.toLongOrNull() ?: return Result.failure(IllegalArgumentException("netease playlistId 非数字: $playlistId"))
         val detail = client.playlistDetail(id).getOrNull() ?: return Result.failure(IllegalStateException("歌单不存在: $playlistId"))
+        // track/all 端点已死(恒 404),走带 n 的 detail 直取(2026-10-11 换通道)
         return client
-            .playlistTracks(id, limit = detail.first.trackCount.coerceAtLeast(1))
+            .playlistTracksViaDetail(id, limit = detail.first.trackCount.coerceAtLeast(1))
             .map { list -> list.map(NeteaseSong::toSongEntity) }
     }
 

@@ -131,12 +131,12 @@ class NeteaseClient(
     }
 
     /**
-     * eapi 动态反作弊 token(易盾 Watchman 反爬,社区称 checkToken v2)。null=不带——
-     * 与 ncm-api-rs 出厂形状一致(纯 eapi 无 token);社区静态值三家仓(months 未变)
-     * 仅作探针对照,不默认启用;将来做 Android WebView 生成器后由此注入。
+     * eapi 动态反作弊 token(易盾 Watchman,社区称 checkToken v2)来源。null=无来源——
+     * 与 ncm-api-rs 出厂形状一致(纯 eapi 无 token,2026-10-11 实测可用);
+     * Android 宿主启动时注入 WatchmanTokenSource(见 composeApp androidMain)。
      */
     @Volatile
-    var antiCheatToken: String? = null
+    var antiCheatSource: NeteaseAntiCheatSource? = null
 
     /**
      * eapi 协议头(Enhanced util/request.js 与 ncm-api-rs request.rs 逐字段一致,
@@ -178,11 +178,11 @@ class NeteaseClient(
         path: String,
         params: Map<String, Any?>,
         host: String = "https://interface.music.163.com",
-        withAntiCheatToken: Boolean = false,
+        /** 已解析的反作弊 token(Enhanced 形状:头 X-antiCheatToken);由调用方从 [antiCheatSource] 取 */
+        antiCheatToken: String? = null,
     ): JsonObject {
         val session = cookieProvider() + sessionCookies
-        val token = if (withAntiCheatToken) antiCheatToken else null
-        val header = eapiProtocolHeader(csrf = sessionCsrf(), musicU = session["MUSIC_U"], antiCheatToken = token)
+        val header = eapiProtocolHeader(csrf = sessionCsrf(), musicU = session["MUSIC_U"], antiCheatToken = antiCheatToken)
         val payload =
             params +
                 ("header" to header) +
