@@ -16,10 +16,15 @@
 | 通道 | 入口函数 | 加密 | 主机 | 生产用途 |
 |---|---|---|---|---|
 | **weapi**（网页端） | `callWeApi(path, params)` | 两层 AES-CBC（一层固定密钥一层随机密钥）+ RSA 包裹随机密钥，`NeteaseCrypto.weApiEncrypt` | `music.163.com/weapi/...` | **大头**：歌单详情/曲目分片、songDetail、歌手/专辑/搜索/cloudsearch、评论列表 v1+v2、红心/关注/收藏/建单删单等一般写操作 |
-| **eapi**（官方 App 主通道） | `callEApi(path, params)` | AES-128-ECB 固定密钥 `e82ckenh8dichen8` + 摘要（`/eapi/...`→`/api/...` 路径+参数+md5），`NeteaseCrypto.eApiEncrypt` | `interface.music.163.com/eapi/...` | 专辑详情（weapi 简介窗口性为空的修复通道）、电台详情 `/djradio/get`；UA 用 eapiUa 模拟官方客户端 |
+| **eapi**（官方 App 主通道） | `callEApi(path, params)` | AES-128-ECB 固定密钥 `e82ckenh8dichen8` + 摘要（`/eapi/...`→`/api/...` 路径+参数+md5），`NeteaseCrypto.eApiEncrypt` | `interface.music.163.com/eapi/...` | 专辑详情（weapi 简介窗口性为空的修复通道）、电台/播客读家族、**歌单编辑 desc/tags、收藏/取消收藏歌单**（2026-10-11 起，见下） |
 | **明文 api** | `callApi` / `callApiGet` / `getText` | 无加密，浏览器头（Origin/Referer/desktopUa） | `music.163.com/api/...` | 红心总数 `/song/red/count`、二维码登录轮询、艺人头像探针、相似歌单 HTML 抓取（getText）、JVM 探针 |
 | **xeapi**（官方 App 9.5.x 写操作通道） | `callXeApi(path, data)` | X25519 密钥协商 + AES-GCM + HMAC-SHA256 + 自定义混淆 + 设备注册（详见下节） | `interface3.music.163.com/xeapi/...` | **评论类写操作：发评/回复/删评/点赞** |
 | linuxapi | `linuxApiEncrypt`（无 call 入口） | AES-ECB 固定密钥包 `/api/linux/forward` 转发 | — | 仅探针实验用，生产未用 |
+
+**eapi 完整协议头（2026-10-11 对照 Enhanced util/request.js + ncm-api-rs request.rs 定案，两仓逐字段一致）**：
+加密体必须 = 业务参数 + `header` 字段 + `e_r:false`，其中 `header` = `{osver:"Microsoft-Windows-10-Professional-build-19045-64bit", deviceId, os:"pc", appver:"3.1.17.204416", versioncode:"140", mobilename:"", buildver:<epoch秒>, resolution:"1920x1080", __csrf, channel:"netease", requestId:"<ms>_<4位随机>"}`（+可选 `X-antiCheatToken`、`MUSIC_U`）；**同一份 map URL 编码后整体替换 Cookie 头**（会话种子/浏览器 cookie 全不带，鉴权靠 map 里的 MUSIC_U）；UA=`NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)`，不带 Referer/Origin。实现=`NeteaseClient.eapiProtocolHeader`。**实证**：残缺形状（无 payload header、浏览器 UA、Cookie 混 weapi 种子）打 `/playlist/desc/update` 恒 HTTP 405"操作过于频繁"且全天不散——补齐后同账号同刻 200 且秒落库（SubscribeEapiProbe）。**"405=账号风控窗口"对 desc 端点系误诊**，先核协议头再谈风控。
+- **收藏/取消收藏歌单**（2026-10-11 迁 eapi）：`/api/playlist/{subscribe,unsubscribe}`，body 只带 id；实测纯 eapi 无 token 即通（收藏→回读 subscribed=true→取消→还原）。Enhanced 形状=收藏分支 body 附 `checkToken`+头 `X-antiCheatToken`（**动态 checkToken v2=易盾 Watchman `tool.min.js` 跑 headless 生成，KMP 不可移植**；社区静态值三家仓数月未变，仅探针对照用）。钩子=`NeteaseClient.antiCheatToken`（默认 null=ncm-api-rs 纯 eapi 形状）。
+- **tags/update 仍吞写**：协议头补齐后 desc 落库而 tags 依旧 code 200 不落地（token/数组形状/body csrf/90s 异步四变体全排除，readback 曾瞬时读到又回吐空=写穿缓存回退）——服务端侧吞噬，疑审核门或最小曲目门（测试歌单仅 1 曲）。调用方维持 200 乐观回写+重进对账。
 
 **xeapi 通道细节**（`crypto/XeapiCrypto.kt` + `NeteaseClient.callXeApi`）：
 - **设备注册**（首次调用自动做，内存缓存 `xeapiKeyState`）：明文表单 POST
@@ -45,9 +50,11 @@
   存在安全风险"（老端点 `/resource/comments/add` 在 weapi/eapi/linuxapi 更是直接 404
   "找不到被评论的资源"，官方已迁 xeapi）。**xeapi 可用**：设备注册给了全新受信身份，
   同一账号同一时刻 weapi like=250 而 xeapi like=200。铁律：评论写操作一律 xeapi。
-- **一般写操作（建单/收藏/关注/红心）**：端点活着，weapi 正常；被 405/250 拒是**账号级
+- **一般写操作（建单/收藏/关注/红心）**：端点活着，weapi 正常；被 405/250 拒**多数**是**账号级
   风控窗口**（重试疑似续期），静置即解——换通道无用（风控认账号+行为，eapi 点赞同样 250
-  即证），别为绕它移植新通道。
+  即证），别为绕它移植新通道。**但有例外（2026-10-11）**：`/playlist/desc/update` 的长效 405
+  实为 eapi 协议头残缺（见上节，补齐即 200+落库），收藏/取消收藏也已迁 eapi——长持不散的 405
+  先对照社区实现核协议头，再下风控结论。
 - X-Real-IP / os=pc 等头域伪装**绕不开**设备风控（实测）。
 
 **评论端点速查**：

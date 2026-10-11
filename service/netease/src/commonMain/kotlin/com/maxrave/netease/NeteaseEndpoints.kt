@@ -1043,8 +1043,9 @@ suspend fun NeteaseClient.deletePlaylist(
 
 // ----------------------------------------------------------------------------
 // 自建歌单编辑(改名/描述/标签/封面/曲目置顶)。端点形状对照 SPlayer ncm-api-rs
-// (src/api/playlist_{name,desc,tags}_update.rs 等)+ binaryify 上游:路径以
-// ncm-api-rs 源码为准(README 的方法名≠真实 URL);全部 weapi,与建单/删单同通道。
+// (src/api/playlist_{name,desc,tags}_update.rs 等)+ NeteaseCloudMusicApi Enhanced:
+// 路径以 ncm-api-rs 源码为准(README 的方法名≠真实 URL);通道=改名/封面两步/曲目
+// 重排走 weapi,desc/tags 走 eapi(ncm-api-rs CryptoType::default()=Eapi 同款)。
 // ----------------------------------------------------------------------------
 
 /** 更新自己的歌单名(weapi /playlist/update/name;空名直接拒绝,不发请求) */
@@ -1066,10 +1067,10 @@ suspend fun NeteaseClient.updatePlaylistName(
 
 /**
  * 更新自己的歌单描述(eapi /playlist/desc/update;空串=清空描述)。
- * **通道实证(2026-10-11 模拟器)**:weapi 打该路径恒 405"操作过于频繁"且与账号风控
- * 无关(同刻 name 走 weapi 200)——binaryify 血统实现(wmp playlist_desc_update.js)
- * 此端点走 eapi(interface3.music.163.com),ncm-api-rs 的 CryptoType::default()=Eapi
- * 同款。id 传字符串(社区两家一致)。
+ * **405 真因已翻案(2026-10-11 二轮)**:weapi 打该路径恒 405 之外,旧 eapi 也 405 的根因
+ * 是 callEApi 协议头残缺(无 payload header/Cookie 整体替换/官方 UA)——补齐社区完整形状
+ * 后同账号同刻 200 且秒落库(SubscribeEapiProbe 三轮回读实证),**并非账号风控窗口**。
+ * id 传字符串(社区两家一致)。
  */
 suspend fun NeteaseClient.updatePlaylistDescription(
     playlistId: Long,
@@ -1088,12 +1089,11 @@ suspend fun NeteaseClient.updatePlaylistDescription(
 
 /**
  * 更新自己的歌单标签(eapi /playlist/tags/update,tags=逗号连接的官方标签名;服务端限 3 个)。
- * 通道同 desc(weapi 405)。**空列表=清空标签**(tags="" 形状,无协议层拒绝)。
- * ⚠️ 2026-10-11 实测:当日账号风控窗口期 tags 写入(含非空 set)**一律 code 200 但
- * 不落地**——单笔写入(无重试连发,排除自伤)8 分钟后 v6 detail/userPlaylists/公开
- * 老 API 三通道回读 tags 均为空数组(字段存在非缺席,排除读盲区)。窗口外落地性
- * 待复验:单笔保存→等 3 分钟→双通道探针;复验通过前,调用方按 code 200 乐观回写、
- * 重进页面对账即自洽(本地"已清空"≠远端已清空)。
+ * 通道同 desc。**空列表=清空标签**(tags="" 形状,无协议层拒绝)。
+ * ⚠️ 2026-10-11 二轮(协议头补齐后):desc 已落库而 tags 依旧 **code 200 但不落地**——
+ * 静态 token/数组形状/body csrf/90s 异步四变体全排除(readback 曾瞬时读到又回吐空=
+ * 写穿缓存回退),属服务端侧吞噬,疑审核门或最小曲目门(测试歌单仅 1 曲)。调用方按
+ * code 200 乐观回写、重进页面对账即自洽(本地"已清空"≠远端已清空)。
  */
 suspend fun NeteaseClient.updatePlaylistTags(
     playlistId: Long,
@@ -1202,20 +1202,27 @@ suspend fun NeteaseClient.updatePlaylistCover(
     }
 
 /**
- * 收藏/取消收藏歌单。**两个独立端点**(binaryify 4.9.2 社区实现同款):收藏
- * /playlist/subscribe、取消 /playlist/unsubscribe,body 只带 id——**没有 t 参数**。
- * 2026-09-21 实测:把 t=1/t=0 发给同一端点会被服务端回 405"操作过于频繁"
- * (PITFALLS 旧的"频控"结论其实是这个畸形参数的误诊),换双端点后立即 200。
+ * 收藏/取消收藏歌单。**eapi 通道**(2026-10-11 对齐社区:Enhanced playlist_subscribe.js
+ * 与 ncm-api-rs playlist_subscribe.rs 均走 eapi /api/playlist/{subscribe,unsubscribe},
+ * weapi 打这两个端点已被服务端风控拒收):body 只带 id。收藏分支按 Enhanced 形状
+ * 在 body 附 `checkToken` 并开 X-antiCheatToken 头([NeteaseClient.antiCheatToken]
+ * 未配置时整体等价 ncm-api-rs 的纯 eapi 形状);**取消分支两样都不带**(社区一致)。
  */
 suspend fun NeteaseClient.subscribePlaylist(
     playlistId: Long,
     subscribe: Boolean,
 ): Result<Boolean> =
     runCatching {
+        val params =
+            buildMap<String, Any?> {
+                put("id", playlistId)
+                if (subscribe) antiCheatToken?.let { put("checkToken", it) }
+            }
         val body =
-            callWeApi(
+            callEApi(
                 if (subscribe) "/playlist/subscribe" else "/playlist/unsubscribe",
-                mapOf("id" to playlistId),
+                params,
+                withAntiCheatToken = true,
             )
         val code = (body["code"] as? JsonPrimitive)?.content
         if (code != "200") {

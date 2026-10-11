@@ -26,6 +26,7 @@ import io.ktor.client.statement.readBytes
 import io.ktor.client.statement.request
 import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -70,10 +71,10 @@ class NeteaseClient(
     private val cookieMutex = Mutex()
     private var sessionCookies: Map<String, String> = emptyMap()
 
-    // NeriPlayer buildRequest 原样:Android 风格 UA,eapi 用
-    private val eapiUa =
-        "Mozilla/5.0 (Linux; Android 10; SimpMusic) AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/124.0.0.0 Mobile Safari/537.36"
+    // eapi 官方客户端 UA(Enhanced/ncm-api-rs 的 chooseUserAgent('api','iphone') 同款,
+    // 2026-10-11 换掉原安卓 Chrome 浏览器 UA:eapi 端点按官方 App 协议头校验,
+    // 浏览器形状的 UA 属于残缺请求头——desc/update 405 的头号嫌疑)
+    private val eapiUa = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
 
     private val desktopUa =
         "Mozilla/5.0 (Macintosh; Intel Mac 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -122,18 +123,74 @@ class NeteaseClient(
         )
     }
 
+    /**
+     * eapi 动态反作弊 token(易盾 Watchman 反爬,社区称 checkToken v2)。null=不带——
+     * 与 ncm-api-rs 出厂形状一致(纯 eapi 无 token);社区静态值三家仓(months 未变)
+     * 仅作探针对照,不默认启用;将来做 Android WebView 生成器后由此注入。
+     */
+    @Volatile
+    var antiCheatToken: String? = null
+
+    /**
+     * eapi 协议头(Enhanced util/request.js 与 ncm-api-rs request.rs 逐字段一致,
+     * 2026-10-11 对照定案):同一份 map 双重复用——序列化进加密体的 `header` 字段,
+     * 并 URL 编码后**整体替换** Cookie 头(会话种子/浏览器 cookie 一概不带,
+     * MUSIC_U 由本 map 承载鉴权)。
+     */
+    private fun eapiProtocolHeader(
+        csrf: String,
+        musicU: String?,
+        antiCheatToken: String?,
+    ): LinkedHashMap<String, String> {
+        val header = LinkedHashMap<String, String>()
+        header["osver"] = "Microsoft-Windows-10-Professional-build-19045-64bit"
+        header["deviceId"] = deviceId
+        header["os"] = "pc"
+        header["appver"] = "3.1.17.204416"
+        header["versioncode"] = "140"
+        header["mobilename"] = ""
+        header["buildver"] = (kotlin.time.Clock.System.now().toEpochMilliseconds() / 1000).toString()
+        header["resolution"] = "1920x1080"
+        header["__csrf"] = csrf
+        header["channel"] = "netease"
+        header["requestId"] =
+            "${kotlin.time.Clock.System.now().toEpochMilliseconds()}_" +
+                kotlin.random.Random.nextInt(1000).toString().padStart(4, '0')
+        antiCheatToken?.let { header["X-antiCheatToken"] = it }
+        musicU?.let { header["MUSIC_U"] = it }
+        // 未登录(游客)时社区用 MUSIC_A 匿名 token 顶上,别让匿名 eapi 读(albumDetail 等)丢鉴权
+        if (musicU == null) anonymousToken?.let { header["MUSIC_A"] = it }
+        return header
+    }
+
+    /** 游客匿名 token(可由宿主注入;社区 generateConfig 走 register_anonimous 落盘 MUSIC_A) */
+    @Volatile
+    var anonymousToken: String? = null
+
     suspend fun callEApi(
         path: String,
         params: Map<String, Any?>,
         host: String = "https://interface.music.163.com",
+        withAntiCheatToken: Boolean = false,
     ): JsonObject {
+        val session = cookieProvider() + sessionCookies
+        val token = if (withAntiCheatToken) antiCheatToken else null
+        val header = eapiProtocolHeader(csrf = sessionCsrf(), musicU = session["MUSIC_U"], antiCheatToken = token)
+        val payload =
+            params +
+                ("header" to header) +
+                // e_r=false = 响应明文(社区 encryptResponse:false 同款),true 则服务端回加密体
+                ("e_r" to false)
         val body =
             post(
                 url = "$host/eapi$path",
                 // 摘要里的路径必须是 /api/...(NeriPlayer 传的是完整 encodedPath 再替换),
                 // 之前直接传 path 少了 /api 前缀,服务端校验过不了
-                form = NeteaseCrypto.eApiEncrypt("/eapi$path", params),
+                form = NeteaseCrypto.eApiEncrypt("/eapi$path", payload),
                 profile = HeaderProfile.EAPI,
+                cookieOverride = header.entries.joinToString("; ") { (k, v) ->
+                    "${k.encodeURLParameter()}=${v.encodeURLParameter()}"
+                },
             )
         if (path.contains("login")) {
             // 只记 code/message/cookie 键名,不落敏感值
@@ -400,17 +457,19 @@ class NeteaseClient(
         form: Map<String, String>,
         extraHeaders: Map<String, String> = emptyMap(),
         profile: HeaderProfile = HeaderProfile.WEAPI,
+        /** eapi 专用:协议头 map 整体替换 Cookie(社区同款);null=常规会话 cookie */
+        cookieOverride: String? = null,
     ): JsonObject {
         val response =
             http.post(url) {
-                header(HttpHeaders.Cookie, buildCookieHeader())
+                header(HttpHeaders.Cookie, cookieOverride ?: buildCookieHeader())
                 if (profile == HeaderProfile.WEAPI) {
                     header(HttpHeaders.Origin, "https://music.163.com")
                     header("Referer", "https://music.163.com")
                     header(HttpHeaders.UserAgent, desktopUa)
                     header("x-os", "web")
                 } else {
-                    header("Referer", "https://music.163.com")
+                    // eapi 不带 Referer/Origin(社区两家实现一致),UA=官方客户端串
                     header(HttpHeaders.UserAgent, eapiUa)
                 }
                 extraHeaders.forEach { (k, v) -> header(k, v) }

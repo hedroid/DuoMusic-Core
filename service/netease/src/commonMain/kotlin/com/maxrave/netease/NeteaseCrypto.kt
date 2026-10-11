@@ -205,18 +205,21 @@ object NeteaseCrypto {
 
     private fun Map<String, Any?>.toJsonElement(): JsonElement =
         buildJsonObject {
-            forEach { (k, v) ->
-                put(
-                    k,
-                    when (v) {
-                        null -> JsonNull
-                        is String -> JsonPrimitive(v)
-                        is Number -> JsonPrimitive(v)
-                        is Boolean -> JsonPrimitive(v)
-                        is JsonElement -> v
-                        else -> JsonPrimitive(v.toString())
-                    },
-                )
-            }
+            forEach { (k, v) -> put(k, v.toJsonValue()) }
+        }
+
+    /** 嵌套 Map(eapi 的 header 字段)要落成 JSON 对象,不能 toString 成字符串 */
+    private fun Any?.toJsonValue(): JsonElement =
+        when (this) {
+            null -> JsonNull
+            is String -> JsonPrimitive(this)
+            is Number -> JsonPrimitive(this)
+            is Boolean -> JsonPrimitive(this)
+            is JsonElement -> this
+            is Map<*, *> ->
+                buildJsonObject {
+                    forEach { (k, v) -> put(k.toString(), v.toJsonValue()) }
+                }
+            else -> JsonPrimitive(toString())
         }
 }
