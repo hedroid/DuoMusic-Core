@@ -208,6 +208,18 @@ data class NeteaseMvSublistPage(
 )
 
 /**
+ * [NeteaseRepositoryImpl.updateNeteasePlaylistInfo] 的逐项落定:true=该项请求已被
+ * 服务端接受(code 200,本地可按新值回写)。调用方把"请求了但 false"的项读作该项
+ * 失败;[firstFailure]=首个非取消异常(全败时用于 405/网络文案分流)。
+ */
+data class NeteasePlaylistInfoUpdateResult(
+    val nameUpdated: Boolean = false,
+    val descriptionUpdated: Boolean = false,
+    val tagsUpdated: Boolean = false,
+    val firstFailure: Throwable? = null,
+)
+
+/**
  * 网易云音源适配层:把 NeteaseClient 的 DTO "整形成 YTM 形状"的 domain 实体,实现统一
  * 契约 [MusicSourceProvider]。Cookie 持久化在 DataStoreManager,client 通过钩子读写。
  *
@@ -1213,12 +1225,15 @@ class NeteaseRepositoryImpl(
     @Volatile private var libraryCreatorIds: Map<Long, Long?> = emptyMap()
 
     /**
-     * userPlaylists 列表里出现过的歌单 id 集(**严格"我的歌单"口径**)。编辑歌单信息/
-     * 封面/置顶的入口判定用它——官方个性化歌单(每日推荐/雷达)的 creatorId 就是用户
-     * 本人,详情页浏览回填的 [libraryCreatorIds] 会被污染把编辑入口误开到官方歌单上;
-     * 这里只在拉过库列表后非空,深链冷启直进详情页时 fail-closed(入口不显示)。
+     * 可编辑的自建歌单 id 集(编辑歌单信息/封面/置顶的入口判定)=userPlaylists 里
+     * creatorId==uid 且 specialType==NORMAL 的子集。两个维度缺一不可:
+     * - 只看列表成员会把**收藏的他人歌单**也放过(userPlaylists 含订阅歌单);
+     * - 只看 creatorId 会把官方个性化歌单放过(每日推荐/雷达的 creatorId 就是用户
+     *   本人,详情页浏览回填的 [libraryCreatorIds] 会被污染)。
+     * 只有两处播种:getLibraryPlaylists 全量、建单成功补入;详情页回填**不**进这里。
+     * 未拉过库列表恒空(fail-closed,深链冷启直进详情页时入口不显示)。
      */
-    @Volatile private var userPlaylistIds: Set<Long> = emptySet()
+    @Volatile private var ownEditablePlaylistIds: Set<Long> = emptySet()
 
     /** 最近一次歌单详情的 订阅态缓存(歌单id→云端是否已收藏);浏览歌单页红心回填用 */
     @Volatile private var playlistSubscribedCache: Map<Long, Boolean> = emptyMap()
@@ -1240,7 +1255,11 @@ class NeteaseRepositoryImpl(
             Logger.w(TAG, "getLibraryPlaylists: uid=${account.userId} size=${list.size}")
             // 红心歌单固定首位:userPlaylists 已标 specialType=FAVORITE,稳定排序兜底服务端乱序
             libraryCreatorIds = list.associate { it.id to it.creatorId }
-            userPlaylistIds = list.map { it.id }.toSet()
+            ownEditablePlaylistIds =
+                list
+                    .filter { it.creatorId == account.userId && it.specialType == NeteasePlaylist.SpecialType.NORMAL }
+                    .map { it.id }
+                    .toSet()
             neteaseLikedPlaylistId =
                 list.firstOrNull { it.specialType == NeteasePlaylist.SpecialType.FAVORITE }?.id
             list.sortedBy { it.specialType != NeteasePlaylist.SpecialType.FAVORITE }.map { it.toPlaylistEntity() }
@@ -1266,12 +1285,13 @@ class NeteaseRepositoryImpl(
     }
 
     /**
-     * 该歌单是否在当前账号的 userPlaylists 里(编辑歌单信息/封面/置顶的门控,
-     * 严格口径见 [userPlaylistIds] 注释)。未拉过库列表恒 false(fail-closed)。
+     * 该歌单是否当前账号**可编辑的自建歌单**(creatorId==uid 且 NORMAL,在 userPlaylists
+     * 里但非收藏他人/非红心/非官方个性化)。编辑歌单信息/封面/置顶的门控,严格口径见
+     * [ownEditablePlaylistIds] 注释。未拉过库列表恒 false(fail-closed)。
      */
-    suspend fun isNeteaseUserPlaylist(playlistId: String): Boolean {
+    suspend fun isOwnEditableNeteasePlaylist(playlistId: String): Boolean {
         val id = playlistId.toLongOrNull() ?: return false
-        return userPlaylistIds.contains(id)
+        return ownEditablePlaylistIds.contains(id)
     }
 
     /** Current account's editable cloud playlists, for the shared add-to-playlist sheet. */
@@ -1311,7 +1331,12 @@ class NeteaseRepositoryImpl(
 
     /** 创建自己的网易歌单(隐私),返回新歌单 id——本地歌单同步上云的建单步骤。 */
     suspend fun createNeteasePlaylist(name: String): Result<String> =
-        client.createPlaylist(name).map { it.toString() }
+        client.createPlaylist(name).map { id ->
+            // 建单即补可编辑集(creator=本人/NORMAL 板上钉钉):新歌单的编辑/封面/置顶
+            // 入口不等下次全量拉库就生效(2026-10-11 CR:此前只回填创建者缓存不补此集)
+            ownEditablePlaylistIds = ownEditablePlaylistIds + id
+            id.toString()
+        }
 
     /**
      * 建单成功的单体回读:/v6/playlist/detail → 与库列表(userPlaylists)完全同一
@@ -1364,36 +1389,56 @@ class NeteaseRepositoryImpl(
 
     /**
      * 编辑自己的网易歌单信息(改名/描述/标签;三项独立端点,null=该项不改、零请求,
-     * 只发变化的请求)。标签须来自官方候选集([getNeteaseHotTags]),服务端限 3 个。
+     * 只发变化的请求)。标签须来自官方候选集([getNeteaseHotTags]),服务端限 3 个;
+     * **空列表=清空标签**,照常发请求(tags="" 形状;当日风控窗口期 tags 写入一律
+     * code 200 不落地,详见 [com.maxrave.netease.updatePlaylistTags] 注释)。
      * 顺序=成功率高的先发:desc 端点对风控最敏感(2026-10-11 实测账号长效 405 窗口,
-     * 同刻 name/tags 可过),放最后让前面的先落地。
+     * 同刻 name 可过),放最后让前面的先落地。
+     *
+     * 逐项独立尝试互不连坐(2026-10-11 CR:此前任一失败整组报失败,已成功的改名被
+     * 本地丢弃还显示旧值,重试又重发一遍)。返回逐项落定+[firstFailure](首个非取消
+     * 异常,全败时调用方拿它分流 405/网络文案)。
      */
     suspend fun updateNeteasePlaylistInfo(
         playlistId: String,
         newName: String? = null,
         newDescription: String? = null,
         newTags: List<String>? = null,
-    ): Result<Boolean> =
-        runCatching {
-            val id = playlistId.toLongOrNull() ?: error("netease playlistId 非数字: $playlistId")
-            var anySent = false
-            newName?.let {
-                client.updatePlaylistName(id, it).getOrThrow()
-                anySent = true
+    ): Result<NeteasePlaylistInfoUpdateResult> {
+        val id =
+            playlistId.toLongOrNull()
+                ?: return Result.failure(IllegalArgumentException("netease playlistId 非数字: $playlistId"))
+        var result = NeteasePlaylistInfoUpdateResult()
+        var firstFailure: Throwable? = null
+
+        suspend fun attempt(block: suspend () -> Unit): Boolean =
+            try {
+                block()
+                true
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (firstFailure == null) firstFailure = e
+                false
             }
-            newTags?.let {
-                // 空列表=清空标签:服务端对该形状的行为未验证(可能假成功),先跳过不请求
-                if (it.isNotEmpty()) {
-                    client.updatePlaylistTags(id, it).getOrThrow()
-                    anySent = true
-                }
+
+        newName?.let {
+            if (attempt { client.updatePlaylistName(id, it).getOrThrow() }) {
+                result = result.copy(nameUpdated = true)
             }
-            newDescription?.let {
-                client.updatePlaylistDescription(id, it).getOrThrow()
-                anySent = true
-            }
-            anySent
         }
+        newTags?.let {
+            if (attempt { client.updatePlaylistTags(id, it).getOrThrow() }) {
+                result = result.copy(tagsUpdated = true)
+            }
+        }
+        newDescription?.let {
+            if (attempt { client.updatePlaylistDescription(id, it).getOrThrow() }) {
+                result = result.copy(descriptionUpdated = true)
+            }
+        }
+        return Result.success(result.copy(firstFailure = firstFailure))
+    }
 
     /** 官方标签候选(编辑歌单信息弹窗的数据源);null=拉取失败,调用方退化为只读展示现有标签 */
     suspend fun getNeteaseHotTags(): List<String>? =
