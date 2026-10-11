@@ -1398,6 +1398,9 @@ class NeteaseRepositoryImpl(
      * 逐项独立尝试互不连坐(2026-10-11 CR:此前任一失败整组报失败,已成功的改名被
      * 本地丢弃还显示旧值,重试又重发一遍)。返回逐项落定+[firstFailure](首个非取消
      * 异常,全败时调用方拿它分流 405/网络文案)。
+     *
+     * 业务码 200 不作数(同轮 CR P2):写后延迟拉详情逐项比对,没映到的项翻回
+     * 失败——调用方拿到的 *Updated 已经是回读对账后的终值。
      */
     suspend fun updateNeteasePlaylistInfo(
         playlistId: String,
@@ -1435,6 +1438,29 @@ class NeteaseRepositoryImpl(
         newDescription?.let {
             if (attempt { client.updatePlaylistDescription(id, it).getOrThrow() }) {
                 result = result.copy(descriptionUpdated = true)
+            }
+        }
+
+        // 延迟回读对账(2026-10-11 CR P2):该端点家族出过 code 200 但不落地(tags 分隔符
+        // 时期的数日吞写),业务码不能作最终成功判定——写完等服务端异步落库(实测秒级,
+        // MV 订阅同款 800ms 起,这里 1.2s)再拉详情逐项比对,没映到的项翻回失败
+        // (调用方按失败项保留旧值+点名 toast)。回读通道自身失败不推翻乐观结果
+        // (对账不可用 ≠ 没写进去);读到旧缓存属假阴性,代价=本地暂显旧值,下次进入对账自愈。
+        if (result.nameUpdated || result.tagsUpdated || result.descriptionUpdated) {
+            delay(NETEASE_PLAYLIST_EDIT_READBACK_DELAY_MS)
+            client.playlistDetail(id).onSuccess { (meta, _) ->
+                if (result.nameUpdated && newName != null && meta.name != newName) {
+                    result = result.copy(nameUpdated = false)
+                }
+                if (result.descriptionUpdated && newDescription != null &&
+                    meta.description?.trim().orEmpty() != newDescription
+                ) {
+                    result = result.copy(descriptionUpdated = false)
+                }
+                // tags 服务端口径无序(官方候选集顺序≠回读顺序),按集合比对
+                if (result.tagsUpdated && newTags != null && meta.tags.toSet() != newTags.toSet()) {
+                    result = result.copy(tagsUpdated = false)
+                }
             }
         }
         return Result.success(result.copy(firstFailure = firstFailure))
@@ -2543,6 +2569,9 @@ private data class NeteaseMoodArtwork(
 }
 
 private const val NETEASE_ARTWORK_TTL_MILLIS = 7L * 24 * 60 * 60 * 1000
+
+/** 歌单信息编辑(改名/描述/标签)写后回读对账前的等待:服务端异步落库,实测秒级 */
+private const val NETEASE_PLAYLIST_EDIT_READBACK_DELAY_MS = 1200L
 
 /** 艺人专辑翻页(getArtistMoreAlbums):页大小/页间防风控间隔/页数上限(500 张封顶,防极端艺人打爆请求) */
 private const val NETEASE_ARTIST_ALBUMS_PAGE = 50
