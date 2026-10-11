@@ -23,7 +23,7 @@
 
 **eapi 完整协议头（2026-10-11 对照 Enhanced util/request.js + ncm-api-rs request.rs 定案，两仓逐字段一致）**：
 加密体必须 = 业务参数 + `header` 字段 + `e_r:false`，其中 `header` = `{osver:"Microsoft-Windows-10-Professional-build-19045-64bit", deviceId, os:"pc", appver:"3.1.17.204416", versioncode:"140", mobilename:"", buildver:<epoch秒>, resolution:"1920x1080", __csrf, channel:"netease", requestId:"<ms>_<4位随机>"}`（+可选 `X-antiCheatToken`、`MUSIC_U`）；**同一份 map URL 编码后整体替换 Cookie 头**（会话种子/浏览器 cookie 全不带，鉴权靠 map 里的 MUSIC_U）；UA=`NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)`，不带 Referer/Origin。实现=`NeteaseClient.eapiProtocolHeader`。**实证**：残缺形状（无 payload header、浏览器 UA、Cookie 混 weapi 种子）打 `/playlist/desc/update` 恒 HTTP 405"操作过于频繁"且全天不散——补齐后同账号同刻 200 且秒落库（SubscribeEapiProbe）。**"405=账号风控窗口"对 desc 端点系误诊**，先核协议头再谈风控。
-- **收藏/取消收藏歌单**（2026-10-11 迁 eapi）：`/api/playlist/{subscribe,unsubscribe}`，body 只带 id；实测纯 eapi 无 token 即通（收藏→回读 subscribed=true→取消→还原）。Enhanced 形状=收藏分支 body 附 `checkToken`+头 `X-antiCheatToken`（**动态 checkToken v2=易盾 Watchman `tool.min.js` 跑 headless 生成，KMP 不可移植**；社区静态值三家仓数月未变，仅探针对照用）。钩子=`NeteaseClient.antiCheatToken`（默认 null=ncm-api-rs 纯 eapi 形状）。
+- **收藏/取消收藏歌单**（2026-10-11 迁 eapi）：`/api/playlist/{subscribe,unsubscribe}`，body 只带 id；实测纯 eapi 无 token 即通（收藏→回读 subscribed=true→取消→还原）。Enhanced 形状=收藏分支 body 附 `checkToken`+头 `X-antiCheatToken`（**动态 checkToken v2=易盾 Watchman，已落地**：`NeteaseAntiCheatSource` 接口(core)+Android `WatchmanTokenSource`(主仓 composeApp androidMain，headless WebView 跑 `acstatic-dun.126.net/tool.min.js`，initWatchman(productNumber=YD00000558929251) 后按业务 key getToken；常量对照 kukume constants.ts)。**生成失败必须 null 降级纯 eapi**；app 内实测 token 170 字符→subscribe 200。取消分支不带 token（社区一致）。
 - **tags/update 仍吞写**：协议头补齐后 desc 落库而 tags 依旧 code 200 不落地（token/数组形状/body csrf/90s 异步四变体全排除，readback 曾瞬时读到又回吐空=写穿缓存回退）——服务端侧吞噬，疑审核门或最小曲目门（测试歌单仅 1 曲）。调用方维持 200 乐观回写+重进对账。
 - **🚨Set-Cookie 抹登录事故（2026-10-11，core 3c615fc 修复）**：`mergeSetCookies` 曾把"空会话+Set-Cookie"整笔落盘——seedCookies 只在登录/切账号调用，正常运行 sessionCookies 恒空，任何带 Set-Cookie 的响应（eapi 写后服务端常下发新 NMTID）都会用 `{"NMTID":...}` 残片覆盖 DataStore 完整 cookie，MUSIC_U 被抹=app 登出。修=落盘门控看 `sessionSeeded` 显式播种标志（**不能看 isNotEmpty()——第一次 Set-Cookie 就把内存会话变非空，第二次即过门，二轮实测又炸**）；未播种会话的 Set-Cookie 只进内存。诊断指纹：宿主 jvmTest 探针（/tmp cookie）全通而 app 内 301"未登录"、datastore netease_cookie 只剩 NMTID。
 
@@ -105,8 +105,9 @@
   - `/v6/playlist/detail`（n=0）的 **trackIds 是 -10000 占位符**，拿去 songDetail 查不到歌；
   - **带 n 的 detail 响应直接内嵌完整 tracks**（NeriPlayer getPlaylistDetail 同款）；
   - `/playlist/track/all` 对这类特殊歌单**间歇性返回空** → 必须 `trackIds/songDetail → 带 n detail` 双路兜底。
-- **`/playlist/track/all` 已死（2026-09-15 复测）**：weapi 通道对所有歌单返回
-  `{"code":404,"message":"接口未找到！"}`（HTTP 200 包 404），不再可用。
+- **`/playlist/track/all` 已死（2026-09-15 复测；2026-10-11 调用点清零）**：weapi 通道对所有歌单返回
+  `{"code":404,"message":"接口未找到！"}`（HTTP 200 包 404），不再可用。playlistTracks 端点函数已删
+  （雷达行首查/getPlaylistSongs 均换 `playlistTracksViaDetail` 带 n detail 直取），防再误用+QQQ 噪音。
   歌单曲目获取一律走 **`/v6/playlist/detail`(n=0) 拿 trackIds → `/v3/song/detail` 按 500/批分片**；
   songDetail 响应顺序与输入一致（探针实测），个别失效 id 缺席需按 slice 顺序回填。
   歌单详情页滚动分页 = continuation 令牌 `NETEASE_PL_PAGE_{offset}`（core/common Config），
