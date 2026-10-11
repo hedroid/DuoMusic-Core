@@ -1090,8 +1090,10 @@ suspend fun NeteaseClient.updatePlaylistDescription(
  * 更新自己的歌单标签(eapi /playlist/tags/update,tags=逗号连接的官方标签名;服务端限 3 个)。
  * 通道同 desc(weapi 405)。**空列表=清空标签**(tags="" 形状,无协议层拒绝)。
  * ⚠️ 2026-10-11 实测:当日账号风控窗口期 tags 写入(含非空 set)**一律 code 200 但
- * 不落地**——20 分钟后 v6 weapi 与公开老 API 双通道回读 tags 均为空;窗口外落地性
- * 待复验,调用方按 code 200 乐观回写、重进页面对账即可自洽。
+ * 不落地**——单笔写入(无重试连发,排除自伤)8 分钟后 v6 detail/userPlaylists/公开
+ * 老 API 三通道回读 tags 均为空数组(字段存在非缺席,排除读盲区)。窗口外落地性
+ * 待复验:单笔保存→等 3 分钟→双通道探针;复验通过前,调用方按 code 200 乐观回写、
+ * 重进页面对账即自洽(本地"已清空"≠远端已清空)。
  */
 suspend fun NeteaseClient.updatePlaylistTags(
     playlistId: Long,
