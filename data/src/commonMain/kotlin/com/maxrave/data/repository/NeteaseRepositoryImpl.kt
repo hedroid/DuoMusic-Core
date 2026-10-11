@@ -208,15 +208,20 @@ data class NeteaseMvSublistPage(
 )
 
 /**
- * [NeteaseRepositoryImpl.updateNeteasePlaylistInfo] 的逐项落定:true=该项请求已被
- * 服务端接受(code 200,本地可按新值回写)。调用方把"请求了但 false"的项读作该项
- * 失败;[firstFailure]=首个非取消异常(全败时用于 405/网络文案分流)。
+ * [NeteaseRepositoryImpl.updateNeteasePlaylistInfo] 的逐项落定:true=该项已通过
+ * 写后回读对账(业务码 200 且云端详情映到新值,本地可按新值回写)。调用方把
+ * "请求了但 false"的项读作该项失败;[firstFailure]=首个非取消异常(全败时用于
+ * 405/网络文案分流)。
+ *
+ * [readbackConfirmed]=false 表示回读通道两连败:业务码只能证明写已达服务端,
+ * 不能证明落地——调用方不得据此报"已保存"(2026-10-11 CR P2 二轮)。
  */
 data class NeteasePlaylistInfoUpdateResult(
     val nameUpdated: Boolean = false,
     val descriptionUpdated: Boolean = false,
     val tagsUpdated: Boolean = false,
     val firstFailure: Throwable? = null,
+    val readbackConfirmed: Boolean = true,
 )
 
 /**
@@ -1400,7 +1405,9 @@ class NeteaseRepositoryImpl(
      * 异常,全败时调用方拿它分流 405/网络文案)。
      *
      * 业务码 200 不作数(同轮 CR P2):写后延迟拉详情逐项比对,没映到的项翻回
-     * 失败——调用方拿到的 *Updated 已经是回读对账后的终值。
+     * 失败——调用方拿到的 *Updated 已经是回读对账后的终值;回读两连败置
+     * [NeteasePlaylistInfoUpdateResult.readbackConfirmed]=false(写已达服务端但
+     * 无法证明落地,不得报"已保存")。
      */
     suspend fun updateNeteasePlaylistInfo(
         playlistId: String,
@@ -1444,11 +1451,23 @@ class NeteaseRepositoryImpl(
         // 延迟回读对账(2026-10-11 CR P2):该端点家族出过 code 200 但不落地(tags 分隔符
         // 时期的数日吞写),业务码不能作最终成功判定——写完等服务端异步落库(实测秒级,
         // MV 订阅同款 800ms 起,这里 1.2s)再拉详情逐项比对,没映到的项翻回失败
-        // (调用方按失败项保留旧值+点名 toast)。回读通道自身失败不推翻乐观结果
-        // (对账不可用 ≠ 没写进去);读到旧缓存属假阴性,代价=本地暂显旧值,下次进入对账自愈。
+        // (调用方按失败项保留旧值+点名 toast)。
+        // 回读通道失败先原地重试一次(写刚在同一网络拿到 200 回包,失败多为瞬时抖动);
+        // 两连败=写其实已达服务端、只是无法证明落地——不推翻乐观结果,但置
+        // readbackConfirmed=false,调用方改用"已提交未确认"文案,不得谎报"已保存"。
+        // 读到旧缓存属假阴性,代价=本地暂显旧值,下次进入对账自愈。
+        var readbackConfirmed = true
         if (result.nameUpdated || result.tagsUpdated || result.descriptionUpdated) {
             delay(NETEASE_PLAYLIST_EDIT_READBACK_DELAY_MS)
-            client.playlistDetail(id).onSuccess { (meta, _) ->
+            var detail = client.playlistDetail(id).getOrNull()
+            if (detail == null) {
+                delay(NETEASE_PLAYLIST_EDIT_READBACK_RETRY_MS)
+                detail = client.playlistDetail(id).getOrNull()
+            }
+            if (detail == null) {
+                readbackConfirmed = false
+            } else {
+                val (meta, _) = detail
                 if (result.nameUpdated && newName != null && meta.name != newName) {
                     result = result.copy(nameUpdated = false)
                 }
@@ -1463,7 +1482,7 @@ class NeteaseRepositoryImpl(
                 }
             }
         }
-        return Result.success(result.copy(firstFailure = firstFailure))
+        return Result.success(result.copy(firstFailure = firstFailure, readbackConfirmed = readbackConfirmed))
     }
 
     /** 官方标签候选(编辑歌单信息弹窗的数据源);null=拉取失败,调用方退化为只读展示现有标签 */
@@ -2572,6 +2591,9 @@ private const val NETEASE_ARTWORK_TTL_MILLIS = 7L * 24 * 60 * 60 * 1000
 
 /** 歌单信息编辑(改名/描述/标签)写后回读对账前的等待:服务端异步落库,实测秒级 */
 private const val NETEASE_PLAYLIST_EDIT_READBACK_DELAY_MS = 1200L
+
+/** 回读对账失败后的重试间隔(写刚拿到 200 回包,回读失败多为瞬时抖动) */
+private const val NETEASE_PLAYLIST_EDIT_READBACK_RETRY_MS = 800L
 
 /** 艺人专辑翻页(getArtistMoreAlbums):页大小/页间防风控间隔/页数上限(500 张封顶,防极端艺人打爆请求) */
 private const val NETEASE_ARTIST_ALBUMS_PAGE = 50
