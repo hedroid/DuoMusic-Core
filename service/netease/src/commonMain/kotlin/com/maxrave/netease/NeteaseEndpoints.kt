@@ -1073,12 +1073,14 @@ suspend fun NeteaseClient.updatePlaylistDescription(
     }
 
 /**
- * 更新自己的歌单标签(eapi /playlist/tags/update,tags=逗号连接的官方标签名;服务端限 3 个)。
- * 通道同 desc。**空列表=清空标签**(tags="" 形状,无协议层拒绝)。
- * ⚠️ 2026-10-11 二轮(协议头补齐后):desc 已落库而 tags 依旧 **code 200 但不落地**——
- * 静态 token/数组形状/body csrf/90s 异步四变体全排除(readback 曾瞬时读到又回吐空=
- * 写穿缓存回退),属服务端侧吞噬,疑审核门或最小曲目门(测试歌单仅 1 曲)。调用方按
- * code 200 乐观回写、重进页面对账即自洽(本地"已清空"≠远端已清空)。
+ * 更新自己的歌单标签(eapi /playlist/tags/update)。**tags=分号连接的官方标签名;服务端限 3 个**。
+ * **空列表=清空标签**(tags="" 形状,无协议层拒绝)。
+ * 🚨分隔符铁律(2026-10-11 三轮实验破案):**必须 `;` 分隔,逗号不行**——逗号连写会被
+ * 服务端当成一个不存在的标签名整体静默丢弃(code 200 但不落地,"吞写"数日的真凶;
+ * hua0512/netease-cloudmusic-api 注释 "tags must be a string separated by ;" 同源,
+ * binaryify/ncm-api-rs 血统传逗号是错的)。实测 `;` 分隔秒落地(tags=[华语,流行])。
+ * 附带结论:同一笔 /api/batch 里 name 子操作用逗号时代照常落地——吞写只针对 tags,
+ * 排除了环境/身份/风控因素;安卓档身份/聚合 batch 均非必需(单端点+分号即通)。
  */
 suspend fun NeteaseClient.updatePlaylistTags(
     playlistId: Long,
@@ -1088,7 +1090,7 @@ suspend fun NeteaseClient.updatePlaylistTags(
         val body =
             callEApi(
                 "/playlist/tags/update",
-                mapOf("id" to playlistId.toString(), "tags" to tags.joinToString(",")),
+                mapOf("id" to playlistId.toString(), "tags" to tags.joinToString(";")),
             )
         val code = (body["code"] as? JsonPrimitive)?.content
         if (code != "200") error(body.str("message") ?: "playlist/tags/update code=$code")

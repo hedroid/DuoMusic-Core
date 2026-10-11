@@ -139,27 +139,55 @@ class NeteaseClient(
     var antiCheatSource: NeteaseAntiCheatSource? = null
 
     /**
-     * eapi 协议头(Enhanced util/request.js 与 ncm-api-rs request.rs 逐字段一致,
-     * 2026-10-11 对照定案):同一份 map 双重复用——序列化进加密体的 `header` 字段,
-     * 并 URL 编码后**整体替换** Cookie 头(会话种子/浏览器 cookie 一概不带,
-     * MUSIC_U 由本 map 承载鉴权)。
+     * eapi 设备档位(社区 osMap 同源):PC=Windows 客户端形状(Enhanced/ncm-api-rs 出厂默认,
+     * desc/收藏/播客读全实证可用);ANDROID=安卓官方 App 形状(标签等 app 独占功能用,
+     * 网页/PC 客户端身份会被服务端软拒——code 200 但不落地,2026-10-11 tags 吞写归因)。
+     */
+    enum class EapiDeviceProfile(
+        val os: String,
+        val appver: String,
+        val osver: String,
+        val channel: String,
+        val ua: String,
+    ) {
+        PC(
+            os = "pc",
+            appver = "3.1.17.204416",
+            osver = "Microsoft-Windows-10-Professional-build-19045-64bit",
+            channel = "netease",
+            ua = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)",
+        ),
+        ANDROID(
+            os = "android",
+            appver = "8.20.20.231215173437",
+            osver = "14",
+            channel = "xiaomi",
+            ua = "NeteaseMusic/9.1.65.240927161425(9001065);Dalvik/2.1.0 (Linux; U; Android 14; 23013RK75C Build/UKQ1.230804.001)",
+        ),
+    }
+
+    /** eapi 协议头(Enhanced util/request.js 与 ncm-api-rs request.rs 逐字段一致,
+     *  2026-10-11 对照定案):同一份 map 双重复用——序列化进加密体的 `header` 字段,
+     *  并 URL 编码后**整体替换** Cookie 头(会话种子/浏览器 cookie 一概不带,
+     *  MUSIC_U 由本 map 承载鉴权)。
      */
     private fun eapiProtocolHeader(
         csrf: String,
         musicU: String?,
         antiCheatToken: String?,
+        profile: EapiDeviceProfile = EapiDeviceProfile.PC,
     ): LinkedHashMap<String, String> {
         val header = LinkedHashMap<String, String>()
-        header["osver"] = "Microsoft-Windows-10-Professional-build-19045-64bit"
+        header["osver"] = profile.osver
         header["deviceId"] = deviceId
-        header["os"] = "pc"
-        header["appver"] = "3.1.17.204416"
+        header["os"] = profile.os
+        header["appver"] = profile.appver
         header["versioncode"] = "140"
         header["mobilename"] = ""
         header["buildver"] = (kotlin.time.Clock.System.now().toEpochMilliseconds() / 1000).toString()
         header["resolution"] = "1920x1080"
         header["__csrf"] = csrf
-        header["channel"] = "netease"
+        header["channel"] = profile.channel
         header["requestId"] =
             "${kotlin.time.Clock.System.now().toEpochMilliseconds()}_" +
                 kotlin.random.Random.nextInt(1000).toString().padStart(4, '0')
@@ -180,9 +208,17 @@ class NeteaseClient(
         host: String = "https://interface.music.163.com",
         /** 已解析的反作弊 token(Enhanced 形状:头 X-antiCheatToken);由调用方从 [antiCheatSource] 取 */
         antiCheatToken: String? = null,
+        /** 设备档位:app 独占功能(tags)用 ANDROID,其余默认 PC */
+        profile: EapiDeviceProfile = EapiDeviceProfile.PC,
     ): JsonObject {
         val session = cookieProvider() + sessionCookies
-        val header = eapiProtocolHeader(csrf = sessionCsrf(), musicU = session["MUSIC_U"], antiCheatToken = antiCheatToken)
+        val header =
+            eapiProtocolHeader(
+                csrf = sessionCsrf(),
+                musicU = session["MUSIC_U"],
+                antiCheatToken = antiCheatToken,
+                profile = profile,
+            )
         val payload =
             params +
                 ("header" to header) +
@@ -198,6 +234,7 @@ class NeteaseClient(
                 cookieOverride = header.entries.joinToString("; ") { (k, v) ->
                     "${k.encodeURLParameter()}=${v.encodeURLParameter()}"
                 },
+                uaOverride = profile.ua,
             )
         if (path.contains("login")) {
             // 只记 code/message/cookie 键名,不落敏感值
@@ -466,6 +503,8 @@ class NeteaseClient(
         profile: HeaderProfile = HeaderProfile.WEAPI,
         /** eapi 专用:协议头 map 整体替换 Cookie(社区同款);null=常规会话 cookie */
         cookieOverride: String? = null,
+        /** eapi 专用:设备档位 UA 覆写;null=默认 eapiUa */
+        uaOverride: String? = null,
     ): JsonObject {
         val response =
             http.post(url) {
@@ -476,8 +515,8 @@ class NeteaseClient(
                     header(HttpHeaders.UserAgent, desktopUa)
                     header("x-os", "web")
                 } else {
-                    // eapi 不带 Referer/Origin(社区两家实现一致),UA=官方客户端串
-                    header(HttpHeaders.UserAgent, eapiUa)
+                    // eapi 不带 Referer/Origin(社区两家实现一致),UA=官方客户端串(按设备档位)
+                    header(HttpHeaders.UserAgent, uaOverride ?: eapiUa)
                 }
                 extraHeaders.forEach { (k, v) -> header(k, v) }
                 setBody(
