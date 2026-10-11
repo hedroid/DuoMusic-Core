@@ -141,6 +141,7 @@ import com.maxrave.netease.personalizedNewSongs
 import com.maxrave.netease.cloudDiskFiles
 import com.maxrave.netease.uploadToCloudDisk
 import com.maxrave.netease.deleteCloudDiskSong
+import com.maxrave.netease.matchCloudDiskSong
 import com.maxrave.netease.playlistDetail
 import com.maxrave.netease.playlistTracks
 import com.maxrave.netease.playlistTracksViaDetail
@@ -1157,6 +1158,26 @@ class NeteaseRepositoryImpl(
     /** 删除云盘歌曲(/cloud/del,不可逆;UI 层负责强确认) */
     suspend fun deleteCloudDiskSong(songId: Long): Result<Boolean> =
         withContext(Dispatchers.IO) { client.deleteCloudDiskSong(songId) }
+
+    /**
+     * 云盘歌曲信息纠正(/cloud/user/song/match;2026-10-11 探针实证,行为详见 client 侧
+     * 注释):adjustSongId=目标曲库歌曲 id(0=解除关联)。成功后条目 id 被服务端换掉,
+     * 调用方必须整页重拉;解除会触发服务端重新指纹识别。
+     */
+    suspend fun matchCloudDiskSong(songId: Long, adjustSongId: Long): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val uid =
+                dao.getAllNeteaseAccount().firstOrNull { it.isUsed }?.userId
+                    ?: dao.getAllNeteaseAccount().firstOrNull()?.userId
+                    ?: error("netease account row missing (matchCloudDiskSong)")
+            client.matchCloudDiskSong(uid, songId, adjustSongId)
+        }
+
+    /** 云盘匹配目标搜索(cloudsearch type=1;弹窗候选列表,20 条够选) */
+    suspend fun searchNeteaseSongsForMatch(keywords: String): Result<List<NeteaseSong>> =
+        withContext(Dispatchers.IO) {
+            client.searchSongs(keywords, limit = 20).map { it.items }
+        }
 
     /** 图表区块:网易排行榜映射进 YT Chart 形状(榜单卡点击进歌单;地区下拉对网易隐藏 → countries=null);
      *  数据走 [toplistCached],与 feed 的"排行榜"行共用一份请求 */

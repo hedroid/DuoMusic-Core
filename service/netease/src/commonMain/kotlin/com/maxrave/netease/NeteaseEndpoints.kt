@@ -2096,6 +2096,41 @@ suspend fun NeteaseClient.deleteCloudDiskSong(songId: Long): Result<Boolean> =
     }
 
 /**
+ * 云盘歌曲信息纠正(weapi /cloud/user/song/match;2026-10-11 两轮探针实证)。
+ * songId=云盘条目**当前** id(=列表行 videoId),adjustSongId=目标曲库歌曲 id
+ * (0=解除关联)。两个关键行为,调用方必须按此设计:
+ * ① 成功后服务端把条目 id 换掉(匹配→asid,解除→重指纹新 id)并挂载目标曲的
+ *    完整元数据(真实艺人/专辑 id、歌词可用);**旧 id 立即失效**——拿旧 id 再调
+ *    本端点回 400"云盘文件不存在",页面必须整页重拉对账,不能原地 patch。
+ * ② 解除并非回到裸文件:服务端会立刻重新指纹识别(实测 ③→②半挂载)。
+ */
+suspend fun NeteaseClient.matchCloudDiskSong(
+    userId: Long,
+    songId: Long,
+    adjustSongId: Long,
+): Result<Unit> =
+    runCatching {
+        val body =
+            callWeApi(
+                "/cloud/user/song/match",
+                mapOf(
+                    "userId" to userId,
+                    "songId" to songId,
+                    "adjustSongId" to adjustSongId,
+                ),
+            )
+        val code = body["code"].nInt() ?: body.str("code")?.toIntOrNull()
+        check(code == 200) {
+            // 服务端消息直接当异常文案(UI toast 透传):三类业务拒绝都自解释——
+            // "当前歌曲不支持匹配"(版权方封锁的目标,实测周杰伦参与演唱的曲目全被拒,
+            // 与 fee 无关)/"云盘文件不存在"(sid 已被换掉,页面过期)/"纠错后的文件
+            // 已在云盘存在"(目标已被本云盘另一文件占用)。message="200" 是成功形状
+            body.str("message")?.takeIf { it.isNotBlank() && it != "200" }
+                ?: "cloud/user/song/match rejected: ${body["code"]}"
+        }
+    }
+
+/**
  * 云盘上传端到端编排(check→alloc→[lbs→nos POST]→info/v2→pub/v2)。
  * md5 由调用方算好传入(大文件流式摘要,平台层职责);[openBody] 每次调用返回新的
  * 上传流(整文件一次 POST,流式不进内存)。返回发布成功的数字歌曲 id。
