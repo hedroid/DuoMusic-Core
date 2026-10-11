@@ -21,6 +21,7 @@ class CloudNonAudioUploadProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("cloud_nonaudio_upload")) return
         val testFile = File("/tmp/nonaudio_probe_test.txt")
         testFile.writeText("not audio at all - probe 2026-10-10")
         val sb = StringBuilder()

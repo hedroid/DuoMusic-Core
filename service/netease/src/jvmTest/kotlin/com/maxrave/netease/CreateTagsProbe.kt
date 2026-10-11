@@ -13,6 +13,7 @@ class CreateTagsProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("create_tags")) return
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {
             val cookies =

@@ -13,6 +13,7 @@ class TagsTrackCountProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("tags_track_count")) return
         val pid = 18405929547L
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {

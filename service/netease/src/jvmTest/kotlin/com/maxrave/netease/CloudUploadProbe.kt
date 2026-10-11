@@ -20,6 +20,7 @@ class CloudUploadProbe {
         val cookieFile = File("/tmp/netease_cookies.json")
         val testFile = File("/tmp/upload_test.mp3")
         if (!cookieFile.exists() || !testFile.exists()) return
+        if (!writeProbeEnabled("cloud_upload")) return
         val sb = StringBuilder()
         val json = Json { prettyPrint = true }
         runBlocking {

@@ -10,6 +10,7 @@ class CloudDeleteIdProbe {
         val cookieFile = File("/tmp/netease_cookies.json")
         val testFile = File("/tmp/upload_test.mp3")
         if (!cookieFile.exists() || !testFile.exists()) return
+        if (!writeProbeEnabled("cloud_delete_id")) return
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {
             val cookies =

@@ -12,6 +12,7 @@ class PlaylistEditProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("playlist_edit")) return
         val pid = 18405929547L
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {

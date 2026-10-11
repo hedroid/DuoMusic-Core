@@ -18,6 +18,7 @@ class SubscribeEapiProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("subscribe_eapi")) return
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {
             val cookies =

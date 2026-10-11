@@ -50,6 +50,7 @@ class CloudMatchProbe {
     fun probe() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("cloud_match")) return
         val out = StringBuilder()
         kotlinx.coroutines.runBlocking {
             val cookies =

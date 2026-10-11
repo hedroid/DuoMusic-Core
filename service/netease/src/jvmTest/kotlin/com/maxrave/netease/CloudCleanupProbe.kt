@@ -9,6 +9,7 @@ class CloudCleanupProbe {
     fun cleanup() {
         val cookieFile = File("/tmp/netease_cookies.json")
         if (!cookieFile.exists()) return
+        if (!writeProbeEnabled("cloud_cleanup")) return
         val sb = StringBuilder()
         kotlinx.coroutines.runBlocking {
             val cookies =

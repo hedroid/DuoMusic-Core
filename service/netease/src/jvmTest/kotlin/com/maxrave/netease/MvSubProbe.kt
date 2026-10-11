@@ -34,6 +34,7 @@ class MvSubProbe {
             println("skip: /tmp/netease_cookies.json not found")
             return
         }
+        if (!writeProbeEnabled("mv_sub")) return
         val out = File("/tmp/mv_sub_probe_out.txt")
         kotlinx.coroutines.runBlocking {
             val json = kotlinx.serialization.json.Json.parseToJsonElement(cookieFile.readText())
