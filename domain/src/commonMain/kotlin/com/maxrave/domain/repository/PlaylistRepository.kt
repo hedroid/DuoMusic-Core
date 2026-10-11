@@ -54,6 +54,19 @@ interface PlaylistRepository {
         playlistId: String,
     )
 
+    /** 网易自建歌单改名/改描述后的本地行回写(编辑歌单信息弹窗保存成功时调用) */
+    suspend fun updatePlaylistTitleAndDescription(
+        playlistId: String,
+        title: String,
+        description: String,
+    )
+
+    /** 网易自建歌单换封面后的本地行回写(新封面 URL 以服务端回读为准) */
+    suspend fun updatePlaylistThumbnails(
+        playlistId: String,
+        thumbnails: String,
+    )
+
     suspend fun updatePlaylistDownloadState(
         playlistId: String,
         downloadState: Int,

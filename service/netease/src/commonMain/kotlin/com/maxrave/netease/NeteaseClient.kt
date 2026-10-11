@@ -360,6 +360,35 @@ class NeteaseClient(
             }
         }
 
+    /**
+     * nos 小对象直传(歌单封面等 KB 级 JPEG;ncm-api-rs avatar_upload 同款固定节点,
+     * 不带 Content-MD5、不走 lbs 发现)。大文件走 [nosPutObject]。
+     */
+    suspend fun nosPutSmallObject(
+        bucket: String,
+        objectKey: String,
+        nosToken: String,
+        contentType: String,
+        bytes: ByteArray,
+    ): Result<Unit> =
+        runCatching {
+            val encodedKey = objectKey.replace("/", "%2F")
+            val response =
+                http.post("https://nosup-hz1.127.net/$bucket/$encodedKey?offset=0&complete=true&version=1.0") {
+                    header("x-nos-token", nosToken)
+                    header(HttpHeaders.ContentType, contentType)
+                    setBody(bytes)
+                }
+            val text = response.bodyAsText()
+            com.maxrave.logger.Logger.w(
+                "CoverUpload",
+                "nos put ${response.status.value} ${bytes.size}B resp=${text.take(160)}",
+            )
+            check(response.status.value in 200..299) {
+                "nos put ${response.status.value}: ${text.take(200)}"
+            }
+        }
+
     /** NeriPlayer buildRequest 的两种头模式:eapi 模拟官方客户端,不吃浏览器头 */
     internal enum class HeaderProfile {
         WEAPI,

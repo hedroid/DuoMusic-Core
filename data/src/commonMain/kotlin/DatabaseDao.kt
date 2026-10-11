@@ -609,6 +609,19 @@ interface DatabaseDao {
         playlistId: String,
     )
 
+    @Query("UPDATE playlist SET title = :title, description = :description WHERE id = :playlistId")
+    suspend fun updatePlaylistTitleAndDescription(
+        title: String,
+        description: String,
+        playlistId: String,
+    )
+
+    @Query("UPDATE playlist SET thumbnails = :thumbnails WHERE id = :playlistId")
+    suspend fun updatePlaylistThumbnails(
+        thumbnails: String,
+        playlistId: String,
+    )
+
     @Query("UPDATE playlist SET downloadState = :downloadState, downloadedAt = :downloadedAt WHERE id = :playlistId")
     suspend fun updatePlaylistDownloadState(
         downloadState: Int,

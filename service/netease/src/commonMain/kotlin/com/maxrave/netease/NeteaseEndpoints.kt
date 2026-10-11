@@ -1041,6 +1041,159 @@ suspend fun NeteaseClient.deletePlaylist(
         (body["code"] as? JsonPrimitive)?.content == "200"
     }
 
+// ----------------------------------------------------------------------------
+// 自建歌单编辑(改名/描述/标签/封面/曲目置顶)。端点形状对照 SPlayer ncm-api-rs
+// (src/api/playlist_{name,desc,tags}_update.rs 等)+ binaryify 上游:路径以
+// ncm-api-rs 源码为准(README 的方法名≠真实 URL);全部 weapi,与建单/删单同通道。
+// ----------------------------------------------------------------------------
+
+/** 更新自己的歌单名(weapi /playlist/update/name;空名直接拒绝,不发请求) */
+suspend fun NeteaseClient.updatePlaylistName(
+    playlistId: Long,
+    name: String,
+): Result<Boolean> =
+    runCatching {
+        require(name.isNotBlank()) { "playlist name must not be blank" }
+        val body =
+            callWeApi(
+                "/playlist/update/name",
+                mapOf("id" to playlistId, "name" to name.trim()),
+            )
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != "200") error(body.str("message") ?: "playlist/update/name code=$code")
+        true
+    }
+
+/**
+ * 更新自己的歌单描述(eapi /playlist/desc/update;空串=清空描述)。
+ * **通道实证(2026-10-11 模拟器)**:weapi 打该路径恒 405"操作过于频繁"且与账号风控
+ * 无关(同刻 name 走 weapi 200)——binaryify 血统实现(wmp playlist_desc_update.js)
+ * 此端点走 eapi(interface3.music.163.com),ncm-api-rs 的 CryptoType::default()=Eapi
+ * 同款。id 传字符串(社区两家一致)。
+ */
+suspend fun NeteaseClient.updatePlaylistDescription(
+    playlistId: Long,
+    description: String,
+): Result<Boolean> =
+    runCatching {
+        val body =
+            callEApi(
+                "/playlist/desc/update",
+                mapOf("id" to playlistId.toString(), "desc" to description),
+            )
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != "200") error(body.str("message") ?: "playlist/desc/update code=$code")
+        true
+    }
+
+/** 更新自己的歌单标签(eapi /playlist/tags/update,tags=逗号连接的官方标签名;服务端限 3 个)。通道同 desc(weapi 405) */
+suspend fun NeteaseClient.updatePlaylistTags(
+    playlistId: Long,
+    tags: List<String>,
+): Result<Boolean> =
+    runCatching {
+        require(tags.isNotEmpty()) { "tags must not be empty" }
+        val body =
+            callEApi(
+                "/playlist/tags/update",
+                mapOf("id" to playlistId.toString(), "tags" to tags.joinToString(",")),
+            )
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != "200") error(body.str("message") ?: "playlist/tags/update code=$code")
+        true
+    }
+
+/**
+ * 官方标签候选(明文 POST /api/playlist/hottags——binaryify 上游 crypto:'api' 同通道;
+ * **GET 同路径返回空体**(模拟器实测 JsonDecodingException),必须 POST)。编辑标签
+ * 弹窗的数据源,约 10 个常用官方标签。
+ */
+suspend fun NeteaseClient.hotPlaylistTags(): Result<List<String>> =
+    runCatching {
+        val body = callApi("/playlist/hottags", emptyMap())
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != null && code != "200") error("playlist/hottags code=$code")
+        body.array("tags")?.mapNotNull { (it as? JsonObject)?.str("name")?.takeIf(String::isNotEmpty) }
+            ?: error("playlist/hottags no tags: ${body.keys}")
+    }
+
+/**
+ * 歌单曲目重排(置顶等轻量排序)。与加歌/移歌同一个 /playlist/manipulate/tracks
+ * 端点换 op=update(ncm-api-rs song_order_update 同形状),trackIds 传**新序全量**
+ * ——先 playlistDetail 拿权威 trackIds 再重排是调用方的责任(见 repo 层)。
+ */
+suspend fun NeteaseClient.updatePlaylistTrackOrder(
+    playlistId: Long,
+    orderedTrackIds: List<Long>,
+): Result<Boolean> =
+    runCatching {
+        require(playlistId > 0L) { "playlistId must be positive" }
+        val ids = orderedTrackIds.filter { it > 0L }.distinct()
+        require(ids.isNotEmpty()) { "orderedTrackIds must not be empty" }
+        val body =
+            callWeApi(
+                "/playlist/manipulate/tracks",
+                mapOf(
+                    "op" to "update",
+                    "pid" to playlistId,
+                    "trackIds" to ids.joinToString(",", prefix = "[", postfix = "]"),
+                ),
+            )
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != "200") error(body.str("message") ?: "playlist order update code=$code")
+        true
+    }
+
+/**
+ * 更新自己的歌单封面(两步式,ncm-api-rs avatar_upload 同款管线换 apply 端点):
+ * 1) weapi /nos/token/alloc(bucket=yyimgs,type=other)拿 objectKey/token/docId
+ * 2) JPEG 裸传 nosup-hz1.127.net
+ * 3) weapi /playlist/cover/update {id, coverImgId=docId}
+ * 图片由调用方预裁成正方形(封面槽位 1:1,与本地歌单封面同一裁剪管线)。
+ */
+suspend fun NeteaseClient.updatePlaylistCover(
+    playlistId: Long,
+    jpegBytes: ByteArray,
+): Result<Boolean> =
+    runCatching {
+        require(playlistId > 0L) { "playlistId must be positive" }
+        require(jpegBytes.isNotEmpty()) { "jpegBytes must not be empty" }
+        val alloc =
+            callWeApi(
+                "/nos/token/alloc",
+                mapOf(
+                    "bucket" to "yyimgs",
+                    "ext" to "jpg",
+                    "filename" to "cover.jpg",
+                    "local" to false,
+                    "nos_product" to 0,
+                    "return_body" to "{\"code\":200,\"size\":\"\$(ObjectSize)\"}",
+                    "type" to "other",
+                ),
+            )
+        val allocCode = (alloc["code"] as? JsonPrimitive)?.content
+        if (allocCode != "200") error(alloc.str("message") ?: "nos/token/alloc code=$allocCode")
+        val result = alloc.obj("result") ?: error("nos/token/alloc no result: ${alloc.keys}")
+        val objectKey = result.str("objectKey") ?: error("nos/token/alloc no objectKey")
+        val nosToken = result.str("token") ?: error("nos/token/alloc no token")
+        val docId = result.str("docId") ?: error("nos/token/alloc no docId")
+        nosPutSmallObject(
+            bucket = "yyimgs",
+            objectKey = objectKey,
+            nosToken = nosToken,
+            contentType = "image/jpeg",
+            bytes = jpegBytes,
+        ).getOrThrow()
+        val body =
+            callWeApi(
+                "/playlist/cover/update",
+                mapOf("id" to playlistId, "coverImgId" to docId),
+            )
+        val code = (body["code"] as? JsonPrimitive)?.content
+        if (code != "200") error(body.str("message") ?: "playlist/cover/update code=$code")
+        true
+    }
+
 /**
  * 收藏/取消收藏歌单。**两个独立端点**(binaryify 4.9.2 社区实现同款):收藏
  * /playlist/subscribe、取消 /playlist/unsubscribe,body 只带 id——**没有 t 参数**。
@@ -2199,6 +2352,15 @@ internal fun JsonElement.toPlaylist(): NeteasePlaylist {
         trackCount = obj["trackCount"].nInt() ?: obj["songCount"].nInt() ?: 0,
         playCount = obj["playCount"].nLong() ?: obj["playcount"].nLong(),
         description = obj.str("description"),
+        // detail 的 tags 是纯字符串数组(["华语"]),hottags 的是对象数组([{name:...}])——两种形状都收
+        tags =
+            obj.array("tags")?.mapNotNull { item ->
+                (item as? JsonObject)?.str("name")
+                    ?: (item as? JsonPrimitive)
+                        ?.takeIf { it !is JsonNull }
+                        ?.contentOrNull
+                        ?.takeIf(String::isNotEmpty)
+            }.orEmpty(),
         specialType = NeteasePlaylist.SpecialType.NORMAL,
         rawSpecialType = obj["specialType"].nInt() ?: 0,
     )

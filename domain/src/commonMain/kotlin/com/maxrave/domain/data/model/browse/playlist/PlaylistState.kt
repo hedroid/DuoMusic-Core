@@ -13,4 +13,6 @@ data class PlaylistState(
     val trackCount: Int = 0,
     val radioEndpoint: YouTubeWatchEndpoint? = null,
     val shuffleEndpoint: YouTubeWatchEndpoint? = null,
+    /** 官方标签名(网易源;编辑歌单信息弹窗预选与页头展示,YT 恒空) */
+    val tags: List<String> = emptyList(),
 )

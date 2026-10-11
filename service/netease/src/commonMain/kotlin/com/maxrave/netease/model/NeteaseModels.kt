@@ -158,6 +158,8 @@ data class NeteasePlaylist(
     val trackCount: Int,
     val playCount: Long?,
     val description: String?,
+    /** 官方标签名(v6 详情的 tags 数组;编辑歌单信息弹窗的预选) */
+    val tags: List<String> = emptyList(),
     /** 每日推荐/雷达等特殊歌单的标记 */
     val specialType: SpecialType = SpecialType.NORMAL,
     /** 当前登录用户是否已收藏该歌单(/v6/playlist/detail 响应,自建歌单恒 false) */

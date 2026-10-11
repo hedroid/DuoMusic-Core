@@ -380,6 +380,17 @@ internal class LocalDataSource(
         playlistId: String,
     ) = databaseDao.updatePlaylistInLibrary(inLibrary, playlistId)
 
+    suspend fun updatePlaylistTitleAndDescription(
+        title: String,
+        description: String,
+        playlistId: String,
+    ) = databaseDao.updatePlaylistTitleAndDescription(title, description, playlistId)
+
+    suspend fun updatePlaylistThumbnails(
+        thumbnails: String,
+        playlistId: String,
+    ) = databaseDao.updatePlaylistThumbnails(thumbnails, playlistId)
+
     suspend fun updatePlaylistDownloadState(
         downloadState: Int,
         playlistId: String,

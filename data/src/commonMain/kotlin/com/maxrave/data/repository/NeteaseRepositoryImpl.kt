@@ -85,6 +85,12 @@ import com.maxrave.netease.highQualityPlaylists
 import com.maxrave.netease.categoryPlaylists
 import com.maxrave.netease.categoryPlaylistsPaged
 import com.maxrave.netease.playlistCatalog
+import com.maxrave.netease.updatePlaylistName
+import com.maxrave.netease.updatePlaylistDescription
+import com.maxrave.netease.updatePlaylistTags
+import com.maxrave.netease.hotPlaylistTags
+import com.maxrave.netease.updatePlaylistTrackOrder
+import com.maxrave.netease.updatePlaylistCover
 import com.maxrave.netease.highQualityPlaylistsPaged
 import com.maxrave.netease.highQualityTags
 import com.maxrave.netease.artistMvs
@@ -1011,6 +1017,7 @@ class NeteaseRepositoryImpl(
                             name = meta.creatorNickname ?: "网易云音乐",
                         ),
                     description = meta.description,
+                    tags = meta.tags,
                     duration = "",
                     durationSeconds = 0,
                     id = meta.id.toString(),
@@ -1184,6 +1191,14 @@ class NeteaseRepositoryImpl(
     /** 最近一次 getLibraryPlaylists 的 歌单id→创建者id 映射(判定自建/收藏歌单的依据) */
     @Volatile private var libraryCreatorIds: Map<Long, Long?> = emptyMap()
 
+    /**
+     * userPlaylists 列表里出现过的歌单 id 集(**严格"我的歌单"口径**)。编辑歌单信息/
+     * 封面/置顶的入口判定用它——官方个性化歌单(每日推荐/雷达)的 creatorId 就是用户
+     * 本人,详情页浏览回填的 [libraryCreatorIds] 会被污染把编辑入口误开到官方歌单上;
+     * 这里只在拉过库列表后非空,深链冷启直进详情页时 fail-closed(入口不显示)。
+     */
+    @Volatile private var userPlaylistIds: Set<Long> = emptySet()
+
     /** 最近一次歌单详情的 订阅态缓存(歌单id→云端是否已收藏);浏览歌单页红心回填用 */
     @Volatile private var playlistSubscribedCache: Map<Long, Boolean> = emptyMap()
 
@@ -1204,6 +1219,7 @@ class NeteaseRepositoryImpl(
             Logger.w(TAG, "getLibraryPlaylists: uid=${account.userId} size=${list.size}")
             // 红心歌单固定首位:userPlaylists 已标 specialType=FAVORITE,稳定排序兜底服务端乱序
             libraryCreatorIds = list.associate { it.id to it.creatorId }
+            userPlaylistIds = list.map { it.id }.toSet()
             neteaseLikedPlaylistId =
                 list.firstOrNull { it.specialType == NeteasePlaylist.SpecialType.FAVORITE }?.id
             list.sortedBy { it.specialType != NeteasePlaylist.SpecialType.FAVORITE }.map { it.toPlaylistEntity() }
@@ -1226,6 +1242,15 @@ class NeteaseRepositoryImpl(
         val uid = client.getAccountStatus().getOrNull()?.userId ?: return emptySet()
         if (uid == 0L) return emptySet()
         return libraryCreatorIds.filterValues { it == uid }.keys.map { it.toString() }.toSet()
+    }
+
+    /**
+     * 该歌单是否在当前账号的 userPlaylists 里(编辑歌单信息/封面/置顶的门控,
+     * 严格口径见 [userPlaylistIds] 注释)。未拉过库列表恒 false(fail-closed)。
+     */
+    suspend fun isNeteaseUserPlaylist(playlistId: String): Boolean {
+        val id = playlistId.toLongOrNull() ?: return false
+        return userPlaylistIds.contains(id)
     }
 
     /** Current account's editable cloud playlists, for the shared add-to-playlist sheet. */
@@ -1314,6 +1339,74 @@ class NeteaseRepositoryImpl(
             val id = playlistId.toLongOrNull() ?: error("netease playlistId 非数字: $playlistId")
             require(!isNeteaseLikedPlaylist(id.toString())) { "红心歌单不可删除" }
             client.deletePlaylist(id).getOrThrow()
+        }
+
+    /**
+     * 编辑自己的网易歌单信息(改名/描述/标签;三项独立端点,null=该项不改、零请求,
+     * 只发变化的请求)。标签须来自官方候选集([getNeteaseHotTags]),服务端限 3 个。
+     * 顺序=成功率高的先发:desc 端点对风控最敏感(2026-10-11 实测账号长效 405 窗口,
+     * 同刻 name/tags 可过),放最后让前面的先落地。
+     */
+    suspend fun updateNeteasePlaylistInfo(
+        playlistId: String,
+        newName: String? = null,
+        newDescription: String? = null,
+        newTags: List<String>? = null,
+    ): Result<Boolean> =
+        runCatching {
+            val id = playlistId.toLongOrNull() ?: error("netease playlistId 非数字: $playlistId")
+            var anySent = false
+            newName?.let {
+                client.updatePlaylistName(id, it).getOrThrow()
+                anySent = true
+            }
+            newTags?.let {
+                // 空列表=清空标签:服务端对该形状的行为未验证(可能假成功),先跳过不请求
+                if (it.isNotEmpty()) {
+                    client.updatePlaylistTags(id, it).getOrThrow()
+                    anySent = true
+                }
+            }
+            newDescription?.let {
+                client.updatePlaylistDescription(id, it).getOrThrow()
+                anySent = true
+            }
+            anySent
+        }
+
+    /** 官方标签候选(编辑歌单信息弹窗的数据源);null=拉取失败,调用方退化为只读展示现有标签 */
+    suspend fun getNeteaseHotTags(): List<String>? =
+        client.hotPlaylistTags()
+            .onFailure { println("QQQ netease hottags failed: ${it::class.simpleName}: ${it.message}") }
+            .getOrNull()
+
+    /**
+     * 置顶一首歌(轻量排序):playlistDetail 拉权威全量 trackIds → 目标歌挪到队首 →
+     * manipulate op=update 提交新序全量。列表分页加载中也能用(顺序以服务端为准)。
+     */
+    suspend fun pinNeteaseTrackToTop(
+        playlistId: String,
+        videoId: String,
+    ): Result<Boolean> =
+        runCatching {
+            val id = playlistId.toLongOrNull() ?: error("netease playlistId 非数字: $playlistId")
+            val songId = videoId.toLongOrNull() ?: error("netease songId 非数字: $videoId")
+            val trackIds =
+                client.playlistDetail(id).getOrNull()?.second
+                    ?: error("拉取歌单曲目失败: $playlistId")
+            require(trackIds.contains(songId)) { "歌曲不在歌单里: $videoId" }
+            val ordered = listOf(songId) + trackIds.filterNot { it == songId }
+            client.updatePlaylistTrackOrder(id, ordered).getOrThrow()
+        }
+
+    /** 更新自己的网易歌单封面(两步 nos 上传+cover/update;jpeg 已由 UI 裁成正方形) */
+    suspend fun updateNeteasePlaylistCover(
+        playlistId: String,
+        jpegBytes: ByteArray,
+    ): Result<Boolean> =
+        runCatching {
+            val id = playlistId.toLongOrNull() ?: error("netease playlistId 非数字: $playlistId")
+            client.updatePlaylistCover(id, jpegBytes).getOrThrow()
         }
 
     /** 收藏/取消收藏网易歌单(/playlist/subscribe);取消后本地最近添加里的行由调用方处理 */

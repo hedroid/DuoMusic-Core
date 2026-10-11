@@ -23,4 +23,6 @@ data class PlaylistBrowse(
      * 包装头部)。自建歌单没有"收藏进资料库"的概念,详情页顶栏收藏心按它隐藏。
      */
     val isOwnYouTubePlaylist: Boolean = false,
+    /** 官方标签名(网易 v6 详情;编辑歌单信息弹窗预选,YT 恒空) */
+    val tags: List<String> = emptyList(),
 )

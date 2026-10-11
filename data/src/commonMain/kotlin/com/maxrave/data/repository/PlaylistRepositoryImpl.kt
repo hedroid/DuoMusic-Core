@@ -135,6 +135,28 @@ internal class PlaylistRepositoryImpl(
         )
     }
 
+    override suspend fun updatePlaylistTitleAndDescription(
+        playlistId: String,
+        title: String,
+        description: String,
+    ) = withContext(Dispatchers.Main) {
+        localDataSource.updatePlaylistTitleAndDescription(
+            title,
+            description,
+            playlistId,
+        )
+    }
+
+    override suspend fun updatePlaylistThumbnails(
+        playlistId: String,
+        thumbnails: String,
+    ) = withContext(Dispatchers.Main) {
+        localDataSource.updatePlaylistThumbnails(
+            thumbnails,
+            playlistId,
+        )
+    }
+
     override suspend fun getRemoteSavedState(playlistId: String): Boolean? {
         if (playlistId.toLongOrNull() != null) {
             return if (neteaseRepository.isLoggedIn.first()) {
