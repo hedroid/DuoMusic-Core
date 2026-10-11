@@ -146,6 +146,7 @@ import com.maxrave.netease.subscribeAlbum
 import com.maxrave.netease.subscribePlaylist
 import com.maxrave.netease.deletePlaylist
 import com.maxrave.netease.djRadioDetail
+import com.maxrave.netease.djProgramDetail
 import com.maxrave.netease.djRadioPrograms
 import com.maxrave.netease.djRadioToplist
 import com.maxrave.netease.djProgramToplist
@@ -2187,6 +2188,10 @@ class NeteaseRepositoryImpl(
                 client.djRadioPrograms(radioId, limit = limit, offset = offset, asc = asc).getOrThrow()
             }
         }
+
+    /** 单节目详情(按 id 直取,播客续播跨页找回;节目不存在=失败走回落) */
+    suspend fun getDjProgramDetail(programId: Long): Result<NeteaseDjProgram> =
+        runCatching { client.djProgramDetail(programId).getOrThrow() }
 
     /** 猜你喜欢电台(需登录;未登录服务端返回空列表,按成功空处理让 UI 隐藏该区块) */
     suspend fun getPersonalizedDjRadios(): Result<List<NeteaseDjRadio>> =

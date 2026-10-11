@@ -1279,6 +1279,17 @@ suspend fun NeteaseClient.djRadioPrograms(
         programs to more
     }
 
+/** 单节目详情(明文 /dj/program/detail,按 programId 直取):program 行与 byradio 列表
+ *  元素同构(DjProgramDetailProbe 实证 mainSong.id 逐一相等,toDjProgramOrNull 完整解析),
+ *  播客续播跨页找回用——目标节目不在详情页已载页时按 id 寻址 1 次请求拿到,不碰 byradio
+ *  分页(同电台连续翻页是 405 限流高危形态)。节目不存在回 code=404 无 program 行。 */
+suspend fun NeteaseClient.djProgramDetail(programId: Long): Result<NeteaseDjProgram> =
+    runCatching {
+        val body = callApi("/dj/program/detail", mapOf("id" to programId))
+        check(body["code"].nInt() == 200) { "dj program detail code=${body["code"]}" }
+        body.obj("program")?.toDjProgramOrNull() ?: error("dj program detail missing program row")
+    }
+
 /** 订阅/退订电台。**未登录调用同样返回 code 200**(Melodia 抓包注释),登录态校验必须在上层 */
 suspend fun NeteaseClient.subDjRadio(
     radioId: Long,
