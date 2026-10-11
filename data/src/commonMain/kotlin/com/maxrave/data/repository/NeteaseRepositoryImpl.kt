@@ -1447,6 +1447,21 @@ class NeteaseRepositoryImpl(
             .getOrNull()
 
     /**
+     * 编辑弹窗的**全量分组标签候选**(2026-10-11):优先分类目录(/playlist/catalogue,
+     * 官方 app 标签选择器同源体系——语种/风格/场景/情感/主题 五组 ~70 个,目录外标签
+     * 实测可写);目录失败退 hottags 单组(组名空=UI 不渲染组头);两者都败 null。
+     */
+    suspend fun getNeteaseTagGroups(): List<Pair<String, List<String>>>? {
+        client.playlistCatalog()
+            .onFailure { println("QQQ netease catalog tags failed: ${it::class.simpleName}: ${it.message}") }
+            .getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { groups -> return groups.map { (name, tags) -> name to tags.map { it.name } } }
+        val hot = getNeteaseHotTags() ?: return null
+        return listOf("" to hot)
+    }
+
+    /**
      * 置顶一首歌(轻量排序):playlistDetail 拉权威全量 trackIds → 目标歌挪到队首 →
      * manipulate op=update 提交新序全量。列表分页加载中也能用(顺序以服务端为准)。
      */
