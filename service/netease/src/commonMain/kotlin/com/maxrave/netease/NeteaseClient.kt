@@ -71,6 +71,11 @@ class NeteaseClient(
     private val cookieMutex = Mutex()
     private var sessionCookies: Map<String, String> = emptyMap()
 
+    /** 会话是否经 seedCookies/replaceCookies 显式播种过(登录收尾/切账号);
+     *  mergeSetCookies 的落盘门控唯一依据(见其注释) */
+    @Volatile
+    private var sessionSeeded = false
+
     // eapi 官方客户端 UA(Enhanced/ncm-api-rs 的 chooseUserAgent('api','iphone') 同款,
     // 2026-10-11 换掉原安卓 Chrome 浏览器 UA:eapi 端点按官方 App 协议头校验,
     // 浏览器形状的 UA 属于残缺请求头——desc/update 405 的头号嫌疑)
@@ -86,6 +91,7 @@ class NeteaseClient(
     suspend fun seedCookies(persisted: Map<String, String>) =
         cookieMutex.withLock {
             sessionCookies = persisted
+            sessionSeeded = true
         }
 
     suspend fun currentCookies(): Map<String, String> = cookieMutex.withLock { sessionCookies }
@@ -95,6 +101,7 @@ class NeteaseClient(
         // 与本路径乱序完成时旧快照覆盖新快照(logout/登录替换与响应并发正是这个场景)
         cookieMutex.withLock {
             sessionCookies = cookies
+            sessionSeeded = true
             cookieSaver(cookies)
         }
     }
@@ -538,6 +545,14 @@ class NeteaseClient(
 
     private suspend fun mergeSetCookies(setCookies: List<String>) {
         cookieMutex.withLock {
+            // 持久化门控(2026-10-11 登录被抹事故,两轮):seedCookies 只在登录/切账号时调用,
+            // 正常运行时 sessionCookies 恒空——把"空会话+Set-Cookie"整笔落盘会用 {"NMTID":...}
+            // 残片覆盖 DataStore 里的完整 cookie(MUSIC_U 被抹,app 登出;触发器=任意带
+            // Set-Cookie 的响应,如 eapi 写被拒/成功后下发新 NMTID)。
+            // **门控必须看"显式播种"标志而非 sessionCookies.isNotEmpty()**:第一次 Set-Cookie
+            // 就会把内存会话变非空,第二次即过门——门就形同虚设(二轮实测又炸一次)。
+            // 仅播种过的会话(=登录收尾/切账号,刻意只要新 cookie 集)才允许落盘;
+            // 未播种会话的 Set-Cookie 只进内存,重启即散,DataStore 原值不动。
             val m = sessionCookies.toMutableMap()
             setCookies.forEach { raw ->
                 val nameValue = raw.substringBefore(';').trim()
@@ -546,9 +561,11 @@ class NeteaseClient(
                 if (name.isNotEmpty()) m[name] = value
             }
             sessionCookies = m
-            // 持久化必须也在锁内:两个并发响应的合并顺序是串行的,锁外写 DataStore
-            // 乱序完成时旧快照会覆盖新快照。
-            cookieSaver(m)
+            if (sessionSeeded) {
+                // 持久化必须也在锁内:两个并发响应的合并顺序是串行的,锁外写 DataStore
+                // 乱序完成时旧快照会覆盖新快照。
+                cookieSaver(m)
+            }
         }
     }
 
