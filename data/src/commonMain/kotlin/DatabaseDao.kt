@@ -48,8 +48,7 @@ import kotlinx.datetime.LocalDateTime
 /**
  * The album name older builds stored when they could not find a real one.
  *
- * Kept in step with the copy in [com.maxrave.data.db.datasource.LocalDataSource] and with the
- * literal baked into [DatabaseDao.refreshAlbumIfPlaceholder]'s WHERE clause.
+ * Kept in step with the literal baked into [DatabaseDao.backfillAlbumName]'s NULLIF chain.
  */
 private const val PLACEHOLDER_ALBUM_NAME = "Album"
 
@@ -294,9 +293,9 @@ interface DatabaseDao {
      * batch collapses them into a handful of commits instead.
      *
      * The per-row semantics are deliberately identical to that single-song path: the insert is
-     * IGNORE, and a row that was dropped because it already exists (rowId -1) gets the same two
-     * self-repair passes — see [refreshAlbumIfPlaceholder] and [refreshArtists] for why they exist
-     * and why their WHERE clauses are what keep good data from being overwritten.
+     * IGNORE, and a row that was dropped because it already exists (rowId -1) gets the same
+     * self-repair passes — see [refreshArtists] and [backfillMetadata] for why they exist
+     * and why their clauses are what keep good data from being overwritten.
      */
     @Transaction
     suspend fun insertSongs(songs: List<SongEntity>) {
@@ -312,18 +311,10 @@ interface DatabaseDao {
      * The self-repair passes for a row [insertSong] dropped because it already existed.
      * Shared by [insertSongs] and the single-song path in LocalDataSource so the two stay
      * identical. Order matters: [refreshArtists] first (it may already write a good id list
-     * along with a corrected name), then the metadata backfill, which only writes when the
-     * stored ids are still all blank.
+     * along with a corrected name), then the metadata backfill, which only fills fields
+     * the stored row is actually missing.
      */
     suspend fun selfRepairIgnoredRow(song: SongEntity) {
-        val albumName = song.albumName
-        if (!albumName.isNullOrBlank() && albumName != PLACEHOLDER_ALBUM_NAME) {
-            refreshAlbumIfPlaceholder(
-                videoId = song.videoId,
-                albumName = albumName,
-                albumId = song.albumId,
-            )
-        }
         val artistName = song.artistName
         if (!artistName.isNullOrEmpty()) {
             refreshArtists(
@@ -344,9 +335,13 @@ interface DatabaseDao {
      * since the now-playing path skips insertSong entirely for stored rows, playback alone
      * never reaches the IGNORE self-repair either. This is the hook both paths converge on.
      *
-     * Only writes what the stored row is actually missing (real artist ids, a real album
-     * name+id); the caller cannot rewrite good data with worse. Returns the merged row so
-     * the playback path can publish it straight away instead of waiting for the DB flow.
+     * Album name and album id are backfilled **field by field**: the playlist-track mapping
+     * can carry a name with a blank id (`Album(id = albumId?.toString() ?: "", …)`), and a
+     * paired SET would clobber a valid stored id with that blank — the merged row would
+     * still show the old id, so the now-playing screen looks fine until the next read.
+     * Each field only fills a blank/placeholder stored value; merged mirrors exactly what
+     * was written. Returns the merged row so the playback path can publish it straight
+     * away instead of waiting for the DB flow.
      */
     suspend fun backfillMetadata(
         fresh: SongEntity,
@@ -358,17 +353,16 @@ interface DatabaseDao {
         if (!freshAlbumName.isNullOrBlank() && freshAlbumName != PLACEHOLDER_ALBUM_NAME &&
             (existing.albumName.isNullOrBlank() || existing.albumName == PLACEHOLDER_ALBUM_NAME)
         ) {
-            // WHERE 双保险(refreshAlbumIfPlaceholder 自己也只落空白/占位行)
-            refreshAlbumIfPlaceholder(
-                videoId = fresh.videoId,
-                albumName = freshAlbumName,
-                albumId = fresh.albumId,
-            )
-            merged =
-                merged.copy(
-                    albumId = merged.albumId ?: fresh.albumId,
-                    albumName = freshAlbumName,
-                )
+            // SQL 自守卫(NULLIF 链)与 Kotlin 条件互为双保险:只落空白/占位名,绝不碰 id
+            backfillAlbumName(freshAlbumName, fresh.videoId)
+            merged = merged.copy(albumName = freshAlbumName)
+        }
+        val freshAlbumId = fresh.albumId
+        if (!freshAlbumId.isNullOrBlank() && existing.albumId.isNullOrBlank()) {
+            // 名/ID 独立补:有名无 ID 的旧行(存档或被清后的形状)也能自愈;
+            // 空串('""',歌单页映射的 null 替身)与 null 同等待遇
+            backfillAlbumId(freshAlbumId, fresh.videoId)
+            merged = merged.copy(albumId = freshAlbumId)
         }
         val freshIds = fresh.artistId
         if (!freshIds.isNullOrEmpty() && freshIds.any { it.isNotBlank() } && existing.artistId?.any { it.isNotBlank() } != true) {
@@ -387,26 +381,40 @@ interface DatabaseDao {
     }
 
     /**
-     * Fills in an album name that an older parse never had.
+     * Album-name half of the metadata backfill: fills a blank/placeholder stored name and
+     * touches nothing else — the paired SET it replaces (see git history) clobbered a valid
+     * stored albumId when the fresh row carried a name with a blank id, which the playlist
+     * track mapping produces (`Album(id = albumId?.toString() ?: "", …)`).
      *
-     * Rows written before the playlist parser read the album column carry the literal string
-     * "Album" — a placeholder invented because the old code took the album's browse id from the
-     * context menu, which has an id but no name. Those rows are never refreshed on their own:
-     * [insertSong] is IGNORE, so every later encounter with the same track is discarded.
-     *
-     * The WHERE clause is the safety catch, not just a filter. A row that already holds a real
-     * album name is untouched no matter who calls this, so a caller holding a sparser entity —
-     * the playback path, say — cannot overwrite good data with worse.
+     * The COALESCE/NULLIF chain is the safety catch, not just a filter: a row that already
+     * holds a real album name keeps it no matter who calls this, so a caller holding a
+     * sparser entity cannot overwrite good data with worse. The stored value is treated as
+     * blank when it is NULL, '' or the 'Album' placeholder ([PLACEHOLDER_ALBUM_NAME]).
      */
     @Query(
-        "UPDATE song SET albumName = :albumName, albumId = :albumId " +
-            "WHERE videoId = :videoId AND (albumName IS NULL OR albumName = '' OR albumName = 'Album')",
+        "UPDATE song SET albumName = COALESCE(NULLIF(NULLIF(albumName, ''), 'Album'), :albumName) " +
+            "WHERE videoId = :videoId",
     )
-    suspend fun refreshAlbumIfPlaceholder(
+    suspend fun backfillAlbumName(
+        albumName: String?,
         videoId: String,
-        albumName: String,
-        albumId: String?,
+    ): Int
+
+    /**
+     * Album-id half of the metadata backfill. Same per-field discipline as
+     * [backfillAlbumName]: fills only a stored blank ('' or NULL — '' is what the playlist
+     * track mapping writes in place of a missing id), never touches a stored id, never
+     * touches the name. Lets a row that has a name but no id (the exact shape the paired
+     * SET used to produce) heal on its own.
+     */
+    @Query(
+        "UPDATE song SET albumId = COALESCE(NULLIF(albumId, ''), :albumId) " +
+            "WHERE videoId = :videoId",
     )
+    suspend fun backfillAlbumId(
+        albumId: String?,
+        videoId: String,
+    ): Int
 
     /**
      * Replaces an artist list that an older parse polluted with the row's trailing metadata.

@@ -176,9 +176,9 @@ internal class LocalDataSource(
      * placeholder can never learn its real album name, however many times it is seen again.
      *
      * Room returns -1 when IGNORE drops the row, which tells us the track already exists without
-     * spending a read to ask. Only then, and only when this copy actually carries a real name, do
-     * we let the database decide whether the stored row is stale — the WHERE clause in
-     * [DatabaseDao.refreshAlbumIfPlaceholder] is what guarantees good data is never overwritten.
+     * spending a read to ask. Only then do we run the repair passes — the clauses in
+     * [DatabaseDao.refreshArtists] and [DatabaseDao.backfillMetadata] are what guarantee good
+     * data is never overwritten.
      *
      * The artist list is refreshed the same way. Rows written before the parser split the subtitle
      * column on " • " kept its trailing groups too, so the album name and the view count were
