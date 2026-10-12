@@ -778,7 +778,16 @@ internal class MediaServiceHandlerImpl(
             coroutineScope.launch {
                 Logger.w(TAG, "getDataOfNowPlayingState: $videoId")
                 Logger.w(TAG, "getDataOfNowPlayingState: ${track?.thumbnails}")
-                songRepository.getSongById(videoId).cancellable().singleOrNull().let { songEntity ->
+                songRepository.getSongById(videoId).cancellable().singleOrNull().let { found ->
+                    // 元数据回填:存档行可能被老混合页映射冻成无 id 形状(artistId=[""]/album 空白),
+                    // 而播放已存行走本分支不 insertSong(IGNORE 自愈够不着)——队列行的新鲜
+                    // 元数据在这里补齐,返回合并行让详情卡/跳转立即可用(不等 DB Flow 重发)。
+                    val songEntity =
+                        found?.let { existing ->
+                            track?.let { queueTrack ->
+                                songRepository.backfillSongMetadata(queueTrack.toSongEntity(), existing)
+                            } ?: existing
+                        }
                     if (songEntity != null) {
                         _controlState.update { it.copy(isLiked = songEntity.liked) }
                         var thumbUrl =

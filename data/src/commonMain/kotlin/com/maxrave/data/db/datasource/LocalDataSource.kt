@@ -38,10 +38,9 @@ private const val DELETE_BATCH_SIZE = 400
  * The playlist parser used to take the album's browse id out of the row's context menu, which
  * carries an id but no title, and filled the name in with this literal string. It then travelled
  * out to MediaSession metadata, where external scrobblers read it. The parser no longer does this,
- * but roughly half the rows already in users' databases still hold it — see [LocalDataSource.insertSong].
+ * but roughly half the rows already in users' databases still hold it — the constant and the
+ * repair now live in [DatabaseDao], next to the repair passes themselves.
  */
-private const val PLACEHOLDER_ALBUM_NAME = "Album"
-
 internal class LocalDataSource(
     private val databaseDao: DatabaseDao,
     private val musicDatabase: MusicDatabase,
@@ -188,25 +187,21 @@ internal class LocalDataSource(
     suspend fun insertSong(song: SongEntity): Long {
         val rowId = databaseDao.insertSong(song)
         if (rowId == -1L) {
-            val albumName = song.albumName
-            if (!albumName.isNullOrBlank() && albumName != PLACEHOLDER_ALBUM_NAME) {
-                databaseDao.refreshAlbumIfPlaceholder(
-                    videoId = song.videoId,
-                    albumName = albumName,
-                    albumId = song.albumId,
-                )
-            }
-            val artistName = song.artistName
-            if (!artistName.isNullOrEmpty()) {
-                databaseDao.refreshArtists(
-                    videoId = song.videoId,
-                    artistName = artistName,
-                    artistId = song.artistId,
-                )
-            }
+            databaseDao.selfRepairIgnoredRow(song)
         }
         return rowId
     }
+
+    /**
+     * Playback-path metadata backfill for an already-stored row (see
+     * [DatabaseDao.backfillMetadata]): the queue's fresh entity carries artist ids / album
+     * info the stored row may have been frozen without. Returns the merged row for
+     * immediate publication.
+     */
+    suspend fun backfillMetadata(
+        fresh: SongEntity,
+        existing: SongEntity,
+    ): SongEntity = databaseDao.backfillMetadata(fresh, existing)
 
     /**
      * Batch counterpart of [insertSong], used by the importer.

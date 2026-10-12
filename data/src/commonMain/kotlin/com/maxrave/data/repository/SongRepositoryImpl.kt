@@ -256,6 +256,11 @@ internal class SongRepositoryImpl(
 
     override fun insertSong(songEntity: SongEntity): Flow<Long> = flow<Long> { emit(localDataSource.insertSong(songEntity)) }.flowOn(Dispatchers.IO)
 
+    override suspend fun backfillSongMetadata(
+        fresh: SongEntity,
+        existing: SongEntity,
+    ): SongEntity = withContext(Dispatchers.IO) { localDataSource.backfillMetadata(fresh, existing) }
+
     override fun updateThumbnailsSongEntity(
         thumbnail: String,
         videoId: String,

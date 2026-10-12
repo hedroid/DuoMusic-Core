@@ -303,24 +303,87 @@ interface DatabaseDao {
         songs.forEach { song ->
             val rowId = insertSong(song)
             if (rowId == -1L) {
-                val albumName = song.albumName
-                if (!albumName.isNullOrBlank() && albumName != PLACEHOLDER_ALBUM_NAME) {
-                    refreshAlbumIfPlaceholder(
-                        videoId = song.videoId,
-                        albumName = albumName,
-                        albumId = song.albumId,
-                    )
-                }
-                val artistName = song.artistName
-                if (!artistName.isNullOrEmpty()) {
-                    refreshArtists(
-                        videoId = song.videoId,
-                        artistName = artistName,
-                        artistId = song.artistId,
-                    )
-                }
+                selfRepairIgnoredRow(song)
             }
         }
+    }
+
+    /**
+     * The self-repair passes for a row [insertSong] dropped because it already existed.
+     * Shared by [insertSongs] and the single-song path in LocalDataSource so the two stay
+     * identical. Order matters: [refreshArtists] first (it may already write a good id list
+     * along with a corrected name), then the metadata backfill, which only writes when the
+     * stored ids are still all blank.
+     */
+    suspend fun selfRepairIgnoredRow(song: SongEntity) {
+        val albumName = song.albumName
+        if (!albumName.isNullOrBlank() && albumName != PLACEHOLDER_ALBUM_NAME) {
+            refreshAlbumIfPlaceholder(
+                videoId = song.videoId,
+                albumName = albumName,
+                albumId = song.albumId,
+            )
+        }
+        val artistName = song.artistName
+        if (!artistName.isNullOrEmpty()) {
+            refreshArtists(
+                videoId = song.videoId,
+                artistName = artistName,
+                artistId = song.artistId,
+            )
+        }
+        getSong(song.videoId)?.let { existing ->
+            backfillMetadata(song, existing)
+        }
+    }
+
+    /**
+     * Repairs the id-less metadata the older netease mix-page mappings froze into rows:
+     * `artistId = [""]` (id-less `Artist(id = null)` stringified) and a null album. Same
+     * track, same names — so [refreshArtists] never fires (its WHERE compares names), and
+     * since the now-playing path skips insertSong entirely for stored rows, playback alone
+     * never reaches the IGNORE self-repair either. This is the hook both paths converge on.
+     *
+     * Only writes what the stored row is actually missing (real artist ids, a real album
+     * name+id); the caller cannot rewrite good data with worse. Returns the merged row so
+     * the playback path can publish it straight away instead of waiting for the DB flow.
+     */
+    suspend fun backfillMetadata(
+        fresh: SongEntity,
+        existing: SongEntity,
+    ): SongEntity {
+        if (existing.videoId != fresh.videoId) return existing
+        var merged = existing
+        val freshAlbumName = fresh.albumName
+        if (!freshAlbumName.isNullOrBlank() && freshAlbumName != PLACEHOLDER_ALBUM_NAME &&
+            (existing.albumName.isNullOrBlank() || existing.albumName == PLACEHOLDER_ALBUM_NAME)
+        ) {
+            // WHERE 双保险(refreshAlbumIfPlaceholder 自己也只落空白/占位行)
+            refreshAlbumIfPlaceholder(
+                videoId = fresh.videoId,
+                albumName = freshAlbumName,
+                albumId = fresh.albumId,
+            )
+            merged =
+                merged.copy(
+                    albumId = merged.albumId ?: fresh.albumId,
+                    albumName = freshAlbumName,
+                )
+        }
+        val freshIds = fresh.artistId
+        if (!freshIds.isNullOrEmpty() && freshIds.any { it.isNotBlank() } && existing.artistId?.any { it.isNotBlank() } != true) {
+            overwriteArtists(
+                videoId = fresh.videoId,
+                artistName = fresh.artistName.orEmpty(),
+                artistId = freshIds,
+            )
+            merged =
+                merged.copy(
+                    artistId = freshIds,
+                    artistName = fresh.artistName ?: existing.artistName,
+                )
+        }
+        return merged
     }
 
     /**
@@ -365,6 +428,21 @@ interface DatabaseDao {
         videoId: String,
         artistName: List<String>,
         artistId: List<String>?,
+    )
+
+    /**
+     * Artist-id backfill half of [refreshArtists]. That method's WHERE compares artist names,
+     * so the very rows that need it most — same track, same names, but ids frozen at `[""]`
+     * by an older, id-less mapping (the netease mix-page feeds wrote `Artist(id = null)`) —
+     * never differ on the name and are never touched. This one is unconditional on purpose:
+     * the caller has already read the row and confirmed the stored id list carries no real id
+     * while the fresh one does. Names ride along because the two lists are index-paired.
+     */
+    @Query("UPDATE song SET artistName = :artistName, artistId = :artistId WHERE videoId = :videoId")
+    suspend fun overwriteArtists(
+        videoId: String,
+        artistName: List<String>,
+        artistId: List<String>,
     )
 
     @Query("UPDATE song SET canvasUrl = :canvasUrl WHERE videoId = :videoId")

@@ -72,6 +72,17 @@ interface SongRepository {
 
     fun insertSong(songEntity: SongEntity): Flow<Long>
 
+    /**
+     * Repairs an already-stored row whose metadata was frozen id-less by an older mapping
+     * (netease mix-page feeds): real artist ids, a real album name+id. `existing` is the
+     * stored row the caller just read; `fresh` carries what the queue knows. Returns the
+     * merged row — only missing fields are filled, good data is never overwritten.
+     */
+    suspend fun backfillSongMetadata(
+        fresh: SongEntity,
+        existing: SongEntity,
+    ): SongEntity
+
     fun updateThumbnailsSongEntity(
         thumbnail: String,
         videoId: String,

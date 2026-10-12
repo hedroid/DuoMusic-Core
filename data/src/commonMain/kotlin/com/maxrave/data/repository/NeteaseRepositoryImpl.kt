@@ -2110,6 +2110,9 @@ class NeteaseRepositoryImpl(
                                     id = it.id,
                                     name = it.name,
                                     artists = it.artists,
+                                    artistIds = it.artistIds,
+                                    albumId = it.albumId,
+                                    albumName = it.albumName,
                                     durationMs = it.durationMs,
                                     coverUrl = it.coverUrl,
                                 )
@@ -2129,10 +2132,13 @@ class NeteaseRepositoryImpl(
 
     private var dailySessionCache: NeteaseDailyCache? = null
 
-    /** 混合页卡用 Content:填 artists(带 id,贯通播放页艺人跳转);videoId=数字 ID 原文 */
+    /** 混合页卡用 Content:填 artists(带 id,贯通播放页艺人跳转);videoId=数字 ID 原文。
+     *  album 也必须带上(toSongEntity 的 albumId 取 Content.album?.id):此前恒 null,
+     *  每日推荐/新歌速递/最近在听/电台/心动起播的歌三点菜单没"专辑"行、播放页说明卡
+     *  发行信息全空、Info 面板专辑"未知"——同 toSongEntity 注释记载的 artistId 家族坑。 */
     private fun NeteaseSong.toMixContent(): Content =
         Content(
-            album = null,
+            album = albumId?.let { Album(id = it.toString(), name = albumName ?: "") },
             artists =
                 artists.mapIndexed { index, name ->
                     Artist(id = artistIds.getOrNull(index)?.toString(), name = name)
@@ -2151,8 +2157,11 @@ class NeteaseRepositoryImpl(
     /** 持久缓存条目 → Content(字段同 toMixContent,日缓存命中路径专用) */
     private fun NeteaseDailyCacheSong.toMixContent(): Content =
         Content(
-            album = null,
-            artists = artists.map { Artist(id = null, name = it) },
+            album = albumId?.let { Album(id = it.toString(), name = albumName ?: "") },
+            artists =
+                artists.mapIndexed { index, name ->
+                    Artist(id = artistIds.getOrNull(index)?.toString(), name = name)
+                },
             description = null,
             isExplicit = false,
             playlistId = null,
@@ -2602,12 +2611,17 @@ private const val NETEASE_ARTIST_ALBUMS_PAGE_GAP_MS = 500L
 
 private const val NETEASE_ARTIST_ALBUMS_MAX_PAGES = 10
 
-/** 每日推荐 30 首的持久缓存形状(混合页;epochDay 用本地日,跨日即失效重拉) */
+/** 每日推荐 30 首的持久缓存形状(混合页;epochDay 用本地日,跨日即失效重拉)。
+ *  artistIds/albumId/albumName 带默认值:旧缓存 JSON(v2 之前)缺字段按默认解析不崩,
+ *  但 key 已换 v2 一次性作废,避免旧形状命中后当天继续缺艺人/专辑 id。 */
 @Serializable
 private data class NeteaseDailyCacheSong(
     val id: Long,
     val name: String,
     val artists: List<String>,
+    val artistIds: List<Long> = emptyList(),
+    val albumId: Long? = null,
+    val albumName: String? = null,
     val durationMs: Long,
     val coverUrl: String? = null,
 )
@@ -2618,7 +2632,7 @@ private data class NeteaseDailyCache(
     val songs: List<NeteaseDailyCacheSong>,
 )
 
-private const val NETEASE_DAILY_CACHE_KEY = "netease_daily_songs_cache"
+private const val NETEASE_DAILY_CACHE_KEY = "netease_daily_songs_cache_v2"
 
 /** 最近在听分区上限(混合页) */
 private const val NETEASE_RECENT_MAX = 50
