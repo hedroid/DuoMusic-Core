@@ -2,7 +2,7 @@ package com.maxrave.domain.mediaservice.handler
 
 import com.maxrave.common.NETEASE_RADIO_PLAYLIST_ID_PREFIX
 import com.maxrave.common.NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX
-import com.maxrave.domain.utils.isRadioQueueId
+import com.maxrave.domain.utils.isEndlessQueueId
 
 /**
  * How many already-played tracks a radio queue keeps behind the current one.
@@ -46,10 +46,11 @@ object RadioQueueTrim {
     ): Boolean =
         playlistType == PlaylistType.RADIO &&
             playlistId != null &&
-            (playlistId.isRadioQueueId() ||
+            // isEndlessQueueId=裸 RD 减 RDCLAK(上游口径,与我们旧写法等价);
+            // 网易电台哨兵为 fork 增加;FM 刻意不裁(fork 既有语义)
+            (playlistId.isEndlessQueueId() ||
                 playlistId.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX) ||
-                playlistId.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX)) &&
-            !playlistId.removePrefix("VL").startsWith("RDCLAK")
+                playlistId.startsWith(NETEASE_ARTIST_RADIO_PLAYLIST_ID_PREFIX))
 
     /**
      * How many tracks to drop from the FRONT of a radio queue, or 0 when it should be left alone.

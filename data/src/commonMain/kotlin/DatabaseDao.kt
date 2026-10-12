@@ -480,6 +480,26 @@ interface DatabaseDao {
     @Query("SELECT * FROM song WHERE totalPlayTime > 1 ORDER BY totalPlayTime DESC LIMIT 50")
     fun getMostPlayedSongs(): Flow<List<SongEntity>>
 
+    // Your library cards: a count and the newest artwork per collection, as Flows so a like, a
+    // follow or a finished download shows on the card straight away.
+    @Query("SELECT COUNT(*) FROM song WHERE liked = 1")
+    fun countLikedSongs(): Flow<Int>
+
+    @Query("SELECT thumbnails FROM song WHERE liked = 1 AND thumbnails IS NOT NULL ORDER BY favoriteAt DESC LIMIT :limit")
+    fun getLikedSongThumbnails(limit: Int): Flow<List<String?>>
+
+    @Query("SELECT COUNT(*) FROM song WHERE downloadState = 3")
+    fun countDownloadedSongs(): Flow<Int>
+
+    @Query("SELECT thumbnails FROM song WHERE downloadState = 3 AND thumbnails IS NOT NULL ORDER BY downloadedAt DESC LIMIT :limit")
+    fun getDownloadedSongThumbnails(limit: Int): Flow<List<String?>>
+
+    @Query("SELECT COUNT(*) FROM artist WHERE followed = 1")
+    fun countFollowedArtists(): Flow<Int>
+
+    @Query("SELECT thumbnails FROM artist WHERE followed = 1 AND thumbnails IS NOT NULL ORDER BY followedAt DESC LIMIT :limit")
+    fun getFollowedArtistThumbnails(limit: Int): Flow<List<String?>>
+
     @Query("UPDATE song SET downloadState = :downloadState, downloadedAt = :downloadedAt WHERE videoId = :videoId")
     suspend fun updateDownloadState(
         downloadState: Int,
@@ -905,8 +925,25 @@ interface DatabaseDao {
     @Insert(onConflict = OnConflictStrategy.Companion.REPLACE)
     suspend fun insertSetVideoId(setVideoIdEntity: SetVideoIdEntity)
 
-    @Query("SELECT * FROM set_video_id WHERE videoId = :videoId")
-    suspend fun getSetVideoId(videoId: String): SetVideoIdEntity?
+    /**
+     * A setVideoId names one entry of one playlist, so the playlist is part of the key. Looked up by
+     * videoId alone, SQLite returned the row whose playlist id sorts first — an entry of whichever
+     * other playlist also holds the song. Pass every spelling the playlist id is stored under.
+     */
+    @Query(
+        "SELECT * FROM set_video_id WHERE videoId = :videoId AND youtubePlaylistId IN (:youtubePlaylistIds) " +
+            "AND setVideoId IS NOT NULL LIMIT 1",
+    )
+    suspend fun getSetVideoId(
+        videoId: String,
+        youtubePlaylistIds: List<String>,
+    ): SetVideoIdEntity?
+
+    @Query("DELETE FROM set_video_id WHERE videoId = :videoId AND youtubePlaylistId = :youtubePlaylistId")
+    suspend fun deleteSetVideoId(
+        videoId: String,
+        youtubePlaylistId: String,
+    )
 
     // setVideoId 是"歌单内条目"级 id(同一首歌在不同歌单不同值),按歌单精确取,
     // 供从 YT 歌单移除单曲时用;上面的 getSetVideoId 不带歌单条件,多歌单命中时形状不可靠
@@ -1352,8 +1389,10 @@ interface DatabaseDao {
      * decides it here is the follow, not the row: the artists that statement spares are unfollowed
      * too, so their notifications go with the rest.
      * `artist.channelId` is NOT NULL, so the subquery cannot smuggle a NULL into the NOT IN.
+     * Blog rows are spared: their `channelId` is "", so without the type filter every one of them
+     * matched, and the RSS worker — which dedups against them — pushed recent posts a second time.
      */
-    @Query("DELETE FROM notification WHERE channelId NOT IN (SELECT channelId FROM artist WHERE followed = 1)")
+    @Query("DELETE FROM notification WHERE type = 'artist' AND channelId NOT IN (SELECT channelId FROM artist WHERE followed = 1)")
     suspend fun deleteNotificationsOfUnfollowedArtists(): Int
 
     /**

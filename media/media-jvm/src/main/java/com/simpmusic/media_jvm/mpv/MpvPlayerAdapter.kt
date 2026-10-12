@@ -41,11 +41,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToInt
+import kotlin.random.Random
 
 private const val TAG = "MpvPlayerAdapter"
 
@@ -269,6 +272,14 @@ class MpvPlayerAdapter(
     private var shuffleIndices = mutableListOf<Int>()
     private var shuffleOrder = mutableListOf<Int>()
 
+    /**
+     * Tracks that keep their place right after the current one when a track is appended under
+     * shuffle: one put there with Play next, and the one a crossfade has picked. Held by identity,
+     * since a queue can hold the same song twice.
+     */
+    private val pinnedNextItems: MutableSet<GenericMediaItem> =
+        Collections.synchronizedSet(Collections.newSetFromMap(IdentityHashMap<GenericMediaItem, Boolean>()))
+
     // Loading management
     private var currentLoadJob: Job? = null
 
@@ -414,6 +425,9 @@ class MpvPlayerAdapter(
                 try {
                     player.seekTo(positionMs)
                     Logger.d(TAG, "Seeked to position: $positionMs")
+                    // Same contract as the Android adapter: every seek is reported, whoever asked
+                    // for it (seek bar, lyric tap, ±5 s, Control Center, SponsorBlock).
+                    notifyListeners { onSeeked(positionMs) }
                 } catch (e: Exception) {
                     Logger.e(TAG, "Seek exception: ${e.message}", e)
                 }
@@ -440,6 +454,7 @@ class MpvPlayerAdapter(
             currentLoadJob?.cancel()
 
             localCurrentMediaItemIndex = mediaItemIndex
+            unpinCurrent()
             currentPlayer?.release()
             currentPlayer = null
             currentPlayerIsVideo = false
@@ -561,7 +576,7 @@ class MpvPlayerAdapter(
         playlist.add(mediaItem)
 
         if (internalShuffleModeEnabled) {
-            createShuffleOrder()
+            insertAppendedIntoShuffleOrder()
         }
 
         notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
@@ -591,6 +606,7 @@ class MpvPlayerAdapter(
                 if (currentIndexBeforeInsert >= 0 && index == currentIndexBeforeInsert + 1) {
                     val currentShufflePos = shuffleIndices.getOrNull(currentIndexBeforeInsert) ?: 0
                     insertIntoShuffleOrder(index, currentShufflePos)
+                    pinnedNextItems.add(mediaItem)
                 } else {
                     createShuffleOrder()
                 }
@@ -614,7 +630,14 @@ class MpvPlayerAdapter(
             // can empty the playlist between the check and removeAt → IndexOutOfBounds (issue #2156 /
             // SIMPMUSIC-DESKTOP-3Y: "Index 0 out of bounds for length 0").
             if (index !in playlist.indices) return@launch
+            // Where the track sat in the shuffled order, read before the order loses it.
+            val shuffledPos = if (internalShuffleModeEnabled) shuffleIndices.getOrNull(index) ?: -1 else -1
             val track = playlist.removeAt(index)
+            // Only this track leaves the shuffled order, before anything below reads the order.
+            // Rebuilding it here (createShuffleOrder) reshuffled the whole queue every time one track
+            // was removed with shuffle on.
+            if (internalShuffleModeEnabled) removeFromShuffleOrder(index)
+            pinnedNextItems.remove(track)
 
             precachedPlayers.remove(track.mediaId)?.let { cached ->
                 cleanupPlayerInternal(cached.player)
@@ -628,9 +651,14 @@ class MpvPlayerAdapter(
                 }
 
                 index == localCurrentMediaItemIndex -> {
-                    if (localCurrentMediaItemIndex >= playlist.size) {
+                    if (internalShuffleModeEnabled && shuffleOrder.isNotEmpty()) {
+                        // The track after it in the shuffled order takes over, not the next one in
+                        // the playlist: the removal shifted that track into the removed one's slot.
+                        localCurrentMediaItemIndex = shuffleOrder[shuffledPos.coerceIn(0, shuffleOrder.lastIndex)]
+                    } else if (localCurrentMediaItemIndex >= playlist.size) {
                         localCurrentMediaItemIndex = playlist.size - 1
                     }
+                    unpinCurrent()
                     if (localCurrentMediaItemIndex >= 0) {
                         loadAndPlayTrackInternal(localCurrentMediaItemIndex, 0, internalPlayWhenReady)
                     } else {
@@ -642,10 +670,6 @@ class MpvPlayerAdapter(
                     clearPrecacheExceptCurrentInternal()
                     triggerPrecachingInternal()
                 }
-            }
-
-            if (internalShuffleModeEnabled) {
-                createShuffleOrder()
             }
 
             notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
@@ -786,6 +810,36 @@ class MpvPlayerAdapter(
             triggerPrecachingInternal()
             notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
             Logger.d(TAG, "trimQueueTo: kept ${newPlaylist.size}, removed ${removed.size}")
+        }
+    }
+
+    override fun moveShuffledItem(
+        fromShuffledIndex: Int,
+        toShuffledIndex: Int,
+    ) {
+        coroutineScope.launch {
+            // Same reason as removeMediaItem (issue #2156): checked against the order as it is now.
+            if (!internalShuffleModeEnabled) return@launch
+            if (fromShuffledIndex !in shuffleOrder.indices || toShuffledIndex !in shuffleOrder.indices) return@launch
+            // Only the play order moves. Playlist indices stay where they were, and with them the
+            // current index and the position a running crossfade would revert to.
+            shuffleOrder.add(toShuffledIndex, shuffleOrder.removeAt(fromShuffledIndex))
+            rebuildShuffleIndices()
+            // Put right after the current track (Move to play next, or a drag), it keeps that slot
+            // the way a Play next track does; moved anywhere else, it no longer holds one.
+            playlist.getOrNull(shuffleOrder[toShuffledIndex])?.let { moved ->
+                if (toShuffledIndex == (shuffleIndices.getOrNull(localCurrentMediaItemIndex) ?: -1) + 1) {
+                    pinnedNextItems.add(moved)
+                } else {
+                    pinnedNextItems.remove(moved)
+                }
+            }
+
+            notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
+
+            // What plays next may have changed.
+            clearPrecacheExceptCurrentInternal()
+            triggerPrecachingInternal()
         }
     }
 
@@ -1952,6 +2006,10 @@ class MpvPlayerAdapter(
         }
         lastBlockedCrossfadeIndex = -1
 
+        // Pinned now, not inside the launch: the target is already chosen, and an append that runs
+        // before the fade makes it current must not take its slot.
+        if (internalShuffleModeEnabled) pinnedNextItems.add(playlist[nextIndex])
+
         crossfadeJob =
             coroutineScope.launch {
                 try {
@@ -2028,6 +2086,7 @@ class MpvPlayerAdapter(
                     // track has no video, leaving a dead surface from a soon-released player on
                     // screen (the "black video until next/prev" bug).
                     localCurrentMediaItemIndex = nextIndex
+                    unpinCurrent()
                     _currentVideoFrames.value = nextPlayer.videoFrames
                     notifyListeners {
                         onMediaItemTransition(
@@ -2944,6 +3003,8 @@ class MpvPlayerAdapter(
     // ========== Shuffle Management ==========
 
     private fun createShuffleOrder() {
+        // A rebuilt order puts no track in any particular place, the pinned ones included.
+        pinnedNextItems.clear()
         if (playlist.isEmpty()) {
             shuffleIndices.clear()
             shuffleOrder.clear()
@@ -2977,6 +3038,7 @@ class MpvPlayerAdapter(
     private fun clearShuffleOrder() {
         shuffleIndices.clear()
         shuffleOrder.clear()
+        pinnedNextItems.clear()
     }
 
     private fun insertIntoShuffleOrder(
@@ -2999,6 +3061,85 @@ class MpvPlayerAdapter(
         shuffleOrder.forEachIndexed { shuffledPos, origIndex ->
             if (origIndex < shuffleIndices.size) {
                 shuffleIndices[origIndex] = shuffledPos
+            }
+        }
+    }
+
+    /**
+     * Gives the track just appended to [playlist] a random place after the current one, leaving
+     * every other track where it was. Rebuilding the order here (createShuffleOrder) reshuffled the
+     * whole queue on every Add to queue and on every track an endless queue appended, and put tracks
+     * already played back in front of the listener.
+     *
+     * The slots right after the current track that hold [pinnedNextItems] are skipped: a Play next
+     * track, and the track a crossfade has picked. The fade chooses its next index first and only
+     * makes it current after resolving and loading it, so a track inserted ahead of it meanwhile
+     * would end up behind Now Playing. Every other slot stays open, so a queue built by appends is
+     * still a fair shuffle, its second track included.
+     *
+     * The full rebuild stays as the fallback for an order that no longer covers the playlist. Appends
+     * arrive on the caller's thread while the player thread edits the order, and rebuilding is what
+     * used to repair such an order on the next append.
+     */
+    private fun insertAppendedIntoShuffleOrder() {
+        val appendedIndex = playlist.lastIndex
+        if (!shuffleOrderCovers(appendedIndex)) {
+            createShuffleOrder()
+            return
+        }
+        val orderSize = shuffleOrder.size
+        val currentShufflePos =
+            (shuffleIndices.getOrNull(localCurrentMediaItemIndex) ?: -1).coerceIn(-1, orderSize - 1)
+        var firstOpenPos = currentShufflePos + 1
+        while (firstOpenPos < orderSize) {
+            val item = shuffleOrder.getOrNull(firstOpenPos)?.let { playlist.getOrNull(it) } ?: break
+            if (item !in pinnedNextItems) break
+            firstOpenPos++
+        }
+        insertIntoShuffleOrder(appendedIndex, Random.nextInt(firstOpenPos, orderSize + 1) - 1)
+    }
+
+    /** Whether [shuffleOrder] is a permutation of the playlist indices `0 until size`. */
+    private fun shuffleOrderCovers(size: Int): Boolean {
+        if (shuffleOrder.size != size || shuffleIndices.size != size) return false
+        val seen = BooleanArray(size)
+        for (i in 0 until size) {
+            val index = shuffleOrder.getOrNull(i) ?: return false
+            if (index !in 0 until size || seen[index]) return false
+            seen[index] = true
+        }
+        return true
+    }
+
+    /**
+     * Releases the pin of the track that just became current. It has had its turn: still pinned, it
+     * would hold every later append back once the queue wraps around to it again.
+     */
+    private fun unpinCurrent() {
+        playlist.getOrNull(localCurrentMediaItemIndex)?.let { pinnedNextItems.remove(it) }
+    }
+
+    /**
+     * Takes [removedOriginalIndex] — already removed from the playlist — out of the shuffled order,
+     * renumbering the playlist indices after it, so every other track keeps its place in the order.
+     */
+    private fun removeFromShuffleOrder(removedOriginalIndex: Int) {
+        shuffleOrder.remove(removedOriginalIndex)
+        for (i in shuffleOrder.indices) {
+            if (shuffleOrder[i] > removedOriginalIndex) {
+                shuffleOrder[i]--
+            }
+        }
+        rebuildShuffleIndices()
+    }
+
+    /** Re-derives the playlist index → shuffled position map from [shuffleOrder]. */
+    private fun rebuildShuffleIndices() {
+        shuffleIndices.clear()
+        shuffleIndices.addAll(List(playlist.size) { 0 })
+        shuffleOrder.forEachIndexed { shuffledPos, originalIndex ->
+            if (originalIndex in shuffleIndices.indices) {
+                shuffleIndices[originalIndex] = shuffledPos
             }
         }
     }

@@ -34,7 +34,9 @@ import com.maxrave.ktorext.getEngine
 import com.maxrave.logger.Logger
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyConfig
+import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.HttpRedirect
+import io.ktor.client.plugins.HttpResponseValidator
 import io.ktor.client.plugins.compression.ContentEncoding
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
@@ -57,6 +59,7 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.userAgent
@@ -174,6 +177,18 @@ class Ytmusic {
             }
             install(CurlLogger) {
                 logger = { Logger.d(TAG, it) }
+            }
+            // Every rejected sign-in on this client lands in the app log in one place. Host and path
+            // only: the query and headers carry the cookie and the account.
+            HttpResponseValidator {
+                handleResponseExceptionWithRequest { cause, request ->
+                    val status =
+                        (cause as? ClientRequestException)?.response?.status
+                            ?: return@handleResponseExceptionWithRequest
+                    if (status == HttpStatusCode.Unauthorized || status == HttpStatusCode.Forbidden) {
+                        Logger.w("Auth", "YouTube: ${request.url.host}${request.url.encodedPath} answered ${status.value}")
+                    }
+                }
             }
             install(HttpRedirect) {
                 checkHttpMethod = false
@@ -1408,10 +1423,10 @@ class Ytmusic {
      * ContentNegotiation will not auto-deserialize the body. We read it as text and parse
      * it explicitly with [normalJson] (which ignores unknown keys for forward-compat).
      */
-    suspend fun getTidalRemoteConfig(): RemoteConfig {
+    suspend fun getTidalRemoteConfig(dev: Boolean = false): RemoteConfig {
         val text =
             httpClient
-                .get(TIDAL_REMOTE_CONFIG_URL) {
+                .get(if (dev) REMOTE_CONFIG_DEV_URL else TIDAL_REMOTE_CONFIG_URL) {
                     accept(ContentType.Application.Json)
                 }.bodyAsText()
         return normalJson.decodeFromString(RemoteConfig.serializer(), text)
@@ -1426,6 +1441,10 @@ class Ytmusic {
         // kept in a separate repo (simpmusic-files) so the main repo stays credential-free.
         const val TIDAL_REMOTE_CONFIG_URL =
             "https://raw.githubusercontent.com/maxrave-dev/simpmusic-files/refs/heads/main/remote-config.json"
+
+        // Read by dev builds only, so a banner can be tried out without any real user seeing it.
+        const val REMOTE_CONFIG_DEV_URL =
+            "https://raw.githubusercontent.com/maxrave-dev/simpmusic-files/refs/heads/main/remote-config-dev.json"
     }
 }
 
