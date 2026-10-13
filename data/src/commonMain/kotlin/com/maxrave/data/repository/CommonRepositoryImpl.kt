@@ -8,7 +8,6 @@ import com.maxrave.domain.data.entities.NotificationEntity
 import com.maxrave.domain.data.model.cookie.CookieItem
 import com.maxrave.domain.data.model.library.LibraryCollectionPreview
 import com.maxrave.domain.data.model.library.LibraryOverview
-import com.maxrave.domain.data.model.promo.Promo
 import com.maxrave.domain.data.type.RecentlyType
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.CommonRepository
@@ -207,14 +206,9 @@ internal class CommonRepositoryImpl(
                             config.tidalClientSecret
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let { dataStoreManager.setTidalClientSecret(it) }
-                            // Home decides the banner from whatever block is saved when its turn
-                            // comes: a fetch that lands first serves this launch, a slower one the
-                            // next. No block means no campaign, so "[]" clears it; an unchanged block
-                            // costs nothing, DataStore skips equal writes.
-                            dataStoreManager.putString(
-                                Promo.cacheKey(isDevBuild),
-                                config.promos?.toString() ?: "[]",
-                            )
+                            // fork: the config's `promos` block (upstream's launch banners) is
+                            // deliberately NOT persisted — the banner feature is removed in the
+                            // fork, so upstream promo content never lands in local storage.
                         }.onFailure {
                             Logger.e("RemoteConfig", "TIDAL remote config fetch failed: ${it.message}")
                         }

@@ -85,6 +85,11 @@ interface DataStoreManager {
 
     suspend fun setNormalizeVolume(normalize: Boolean)
 
+    /** app log 文件记录暂停态(TRUE=暂停;2026-10-13 持久化,跨 app 重启恢复) */
+    val appLogFileLoggingPaused: Flow<String>
+
+    suspend fun setAppLogFileLoggingPaused(paused: Boolean)
+
     val skipSilent: Flow<String>
 
     suspend fun setSkipSilent(skip: Boolean)

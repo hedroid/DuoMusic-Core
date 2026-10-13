@@ -11,10 +11,15 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.PreferencesFileSerializer
 import com.maxrave.common.SETTINGS_FILENAME
 import com.maxrave.data.io.getHomeFolderPath
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 
+@OptIn(ExperimentalCoroutinesApi::class)
 actual fun createDataStoreInstance(): DataStore<Preferences> =
     PreferenceDataStoreFactory.create(
         storage =
@@ -23,6 +28,10 @@ actual fun createDataStoreInstance(): DataStore<Preferences> =
                     File(getHomeFolderPath(listOf(".simpmusic")), "$SETTINGS_FILENAME.preferences_pb").absoluteFile
                 },
             ),
+        // Dedicated thread: same rationale as the android actual — DataStore reads/writes must not
+        // queue behind unrelated work on the shared IO pool while main-thread runBlocking readers
+        // wait on them (see createDataStore.kt, failure case 2026-10-12).
+        scope = CoroutineScope(SupervisorJob() + newSingleThreadContext("SimpDataStore")),
     )
 
 /**

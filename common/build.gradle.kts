@@ -54,6 +54,8 @@ kotlin {
                 implementation(libs.kermit.logging)
                 // RollingFileLogWriter: the on-disk app log (see Logger.enableFileLogging).
                 implementation(libs.kermit.io)
+                // LevelFileWriter.shutdown 释放 kermit 写入器的专用线程(反射触及协程类型)
+                implementation(libs.kotlinx.coroutinesCore)
                 api(libs.kotlinx.datetime)
                 api(libs.uri)
             }

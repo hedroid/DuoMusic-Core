@@ -815,6 +815,18 @@ class NeteaseRepositoryImpl(
             .categoryPlaylistsPaged(cat = cat ?: "全部", pages = 2)
             .map { list -> if (list.isEmpty()) null else list.toPlaylistHomeItem(cat ?: "全部歌单") }
 
+    /**
+     * 精品歌单二级页(主页"精品歌单"行的更多入口):游标分页,before 传上页 nextBefore;
+     * 返回 内容 + 下一页游标(null=没有更多)。
+     */
+    suspend fun getHqPlaylistPage(before: Long = 0L): Result<Pair<List<MoodContent>, Long?>> =
+        client.highQualityPlaylists(limit = 50, before = before).map { page ->
+            page.playlists.map { it.toMoodContentItem() } to page.nextBefore
+        }
+
+    /** 排行榜二级页(主页"排行榜"行的更多入口):完整榜单,与主页行共用 toplistCached(10min) */
+    suspend fun getToplistContents(): List<MoodContent> = toplistCached().orEmpty().map { it.toMoodContentItem() }
+
     // ----------------------------------------------------------------------------
     // 主页复用适配:把网易数据映射进上游 HomeScreen 的 Mood/Chart 形状
     // ----------------------------------------------------------------------------
@@ -1887,6 +1899,20 @@ class NeteaseRepositoryImpl(
         return song.toSongsResult().toTrack()
     }
 
+    /** 批量版权态刷新(喜欢歌曲等本地列表页的显示纠偏):songDetail 顶层 privileges 合并出
+     *  的 hasCopyright(与歌单管线同一判定),id→可用态;失败/缺 privileges 的 id 不在返回里。
+     *  500/批分片拉全量(CR P2:旧实现 take(500),>500 首的歌永远纠偏不到);任一批失败返回
+     *  null——调用方(VM)据此不落"已刷新"标记,下次进入重试。 */
+    suspend fun refreshNeteaseSongsAvailability(songIds: List<Long>): Map<Long, Boolean>? {
+        val result = mutableMapOf<Long, Boolean>()
+        songIds.chunked(500).forEach { batch ->
+            val page =
+                client.songDetail(batch).getOrNull() ?: return null
+            page.forEach { s -> s.hasCopyright?.let { result[s.id] = it } }
+        }
+        return result
+    }
+
     // ===== MV(2026-10-07 明文 API 探针实证;videoId=NETEASE_MV_<mvid> 哨兵,取流/队列/红心按前缀分流) =====
 
     /** 歌手 MV 分页(歌手页 MV 货架):Track 16:9 缩略图 → toMediaItem 判 VIDEO → 视频层复用 */
@@ -2422,9 +2448,10 @@ class NeteaseRepositoryImpl(
     suspend fun getDjProgramDetail(programId: Long): Result<NeteaseDjProgram> =
         runCatching { client.djProgramDetail(programId).getOrThrow() }
 
-    /** 猜你喜欢电台(需登录;未登录服务端返回空列表,按成功空处理让 UI 隐藏该区块) */
-    suspend fun getPersonalizedDjRadios(): Result<List<NeteaseDjRadio>> =
-        runCatching { client.personalizedDjRadios().getOrThrow() }
+    /** 猜你喜欢电台(需登录;未登录服务端返回空列表,按成功空处理让 UI 隐藏该区块)。
+     *  limit:发现页货架用默认 10,二级页放大一次拉全。 */
+    suspend fun getPersonalizedDjRadios(limit: Int = 10): Result<List<NeteaseDjRadio>> =
+        runCatching { client.personalizedDjRadios(limit = limit).getOrThrow() }
 
     /** 精选电台(公开) */
     suspend fun getRecommendDjRadios(): Result<List<NeteaseDjRadio>> =
@@ -2504,6 +2531,18 @@ class NeteaseRepositoryImpl(
             .map { list -> ArrayList(list.map { it.toAlbumsResult() }) }
             .onSuccess { cache.set(it) }
     }
+
+    /** 新碟上架二级页分页(2026-10-13,/album/new limit+offset):独立于主页行缓存
+     *  (二级页首页也走网络,不做 10min TTL);服务端若不认 offset 会翻回重复页,
+     *  VM 侧按 browseId 去重+进度判定兜底(与精品歌单页同防线)。 */
+    suspend fun getNewAlbumsPage(
+        area: String = "ALL",
+        limit: Int = 30,
+        offset: Int = 0,
+    ): Result<ArrayList<AlbumsResult>> =
+        client
+            .newAlbums(area = area, limit = limit, offset = offset)
+            .map { list -> ArrayList(list.map { it.toAlbumsResult() }) }
 
     /** 关注的歌手行(/artist/sublist,需登录);行缓存 10min */
     suspend fun getSubscribedArtists(force: Boolean = false): Result<ArrayList<ArtistsResult>> {
@@ -2646,6 +2685,18 @@ enum class NeteaseTagOrder {
     HQ, // 精品歌单(高质量接口,游标分页)
 }
 
+/** 单张网易歌单 → moodmoments.Content(二级页网格卡;与 toMoodsMomentObject 的行映射同款字段) */
+private fun NeteasePlaylist.toMoodContentItem(): MoodContent =
+    MoodContent(
+        playlistBrowseId = id.toString(),
+        subtitle = (creatorNickname ?: description.sanitizeCardSubtitle()).orEmpty(),
+        thumbnails =
+            coverUrl?.let {
+                listOf(Thumbnail(height = 540, url = it.toNeteaseCoverUrl() ?: it, width = 540))
+            },
+        title = name,
+    )
+
 /** 分类歌单列表 → YT MoodsMomentObject 形状(MoodScreen/NeteaseTagScreen 通用渲染) */
 private fun List<NeteasePlaylist>.toMoodsMomentObject(tag: String): MoodsMomentObject? =
     if (isEmpty()) {
@@ -2663,7 +2714,7 @@ private fun List<NeteasePlaylist>.toMoodsMomentObject(tag: String): MoodsMomentO
                             map { pl ->
                                 MoodContent(
                                     playlistBrowseId = pl.id.toString(),
-                                    subtitle = pl.description.sanitizeCardSubtitle().orEmpty(),
+                                    subtitle = (pl.creatorNickname ?: pl.description.sanitizeCardSubtitle()).orEmpty(),
                                     thumbnails =
                                         pl.coverUrl?.let {
                                             listOf(Thumbnail(height = 540, url = it.toNeteaseCoverUrl() ?: it, width = 540))
@@ -2747,8 +2798,11 @@ private fun List<NeteasePlaylist>.toPlaylistHomeItem(title: String): HomeItem =
                 Content(
                     album = null,
                     artists = null,
-                    // 推荐接口的 description 常是 "0"/"1"/"2" 这类数字,清掉回退到"播放列表"占位
-                    description = pl.description.sanitizeCardSubtitle(),
+                    // 推荐接口的 description 常是 "0"/"1"/"2" 这类数字,清掉回退到作者
+                    // (2026-10-13 用户反馈"副标题应显示作者,咋都显示歌单"——UI 对
+                    // playlistId+无 description 的卡回退占位串"歌单";description 填
+                    // creatorNickname 即可显示作者,雷达歌单等官方单也照实显示创建者)
+                    description = pl.creatorNickname ?: pl.description.sanitizeCardSubtitle(),
                     isExplicit = false,
                     playlistId = pl.id.toString(),
                     browseId = null,

@@ -161,7 +161,9 @@ internal class StreamRepositoryImpl(
                 val candidates = brs.keys.filter { it in 240..1080 }.sorted()
                 val pick = candidates.lastOrNull { it <= wanted } ?: candidates.firstOrNull()
                 val url = pick?.let { brs[it] }
-                Logger.w("Stream", "MV $videoId picked ${pick}p -> $url")
+                // Never the URL: it is signed (wsSecret/wsTime) and file logging (Info+) persists
+                // WARN lines, so a shared log export would hand out a playable link.
+                Logger.w("Stream", "MV $videoId picked ${pick}p, url withheld")
                 emit(url)
                 return@flow
             }
