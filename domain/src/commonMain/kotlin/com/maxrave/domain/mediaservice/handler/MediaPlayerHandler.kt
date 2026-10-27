@@ -485,9 +485,13 @@ enum class AddToQueueBlock {
  * Decided by the id alone, not the type: a mix opened from its playlist page is queued as
  * [PlaylistType.PLAYLIST] and still never ends. [AddToQueueBlock.RADIO] wins when both apply, since
  * turning Endless queue off would not lift the block then.
+ *
+ * An empty queue is never blocked: nothing is playing yet, and Add to queue there starts the queue
+ * and plays it (#2596).
  */
 fun QueueData?.addToQueueBlock(endlessQueue: Boolean): AddToQueueBlock? =
     when {
+        this == null || data.listTracks.isEmpty() -> null
         // isEndlessRadioQueueId = upstream 的宽口径（裸 RD 减策展）+ 网易电台哨兵
         // （FM/单曲电台/艺人电台按设计无论开关都无尽，同样没有队尾可加）
         this?.data?.playlistId?.isEndlessRadioQueueId() == true -> AddToQueueBlock.RADIO

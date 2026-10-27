@@ -17,4 +17,6 @@ data class ResultSong(
     val videoType: String?,
     /** 网易播客节目 id(仅播客 toResultSong 填充):随 toTrack 进队列,收听位置记忆 O(1) 读取(CR-26) */
     val neteaseProgramId: Long? = null,
+    /** From the row's LIVE chip. This model has no `resultType` to carry the marker the others use. */
+    val isLive: Boolean = false,
 )

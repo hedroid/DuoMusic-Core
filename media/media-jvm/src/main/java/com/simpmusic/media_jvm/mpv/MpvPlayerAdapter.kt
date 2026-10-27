@@ -1,6 +1,7 @@
 package com.simpmusic.media_jvm.mpv
 
 import com.maxrave.common.MERGING_DATA_TYPE
+import com.maxrave.domain.data.player.AppOnScreen
 import com.maxrave.domain.data.player.AudioEffects
 import com.maxrave.domain.data.player.AudioOutput
 import com.maxrave.domain.data.player.AudioOutputKind
@@ -29,6 +30,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -124,6 +126,16 @@ class MpvPlayerAdapter(
             dataStoreManager.crossfadeSkipAlbum.collect { enabled ->
                 skipCrossfadeInAlbum = (enabled == DataStoreManager.TRUE)
                 Logger.d(TAG, "Skip crossfade inside album: $skipCrossfadeInAlbum")
+            }
+        }
+
+        // No window on screen: stop decoding video on every handle that has it, and pick it back up
+        // when a window returns. Handles created meanwhile get the same in applyPlaybackLevels().
+        // drop(1): the current value needs nothing done, and acting on it here could run before the
+        // handle collections below are initialised.
+        coroutineScope.launch {
+            AppOnScreen.onScreen.drop(1).collect { onScreen ->
+                forEachLiveHandle { it.setVideoSuspended(!onScreen) }
             }
         }
     }
@@ -543,6 +555,15 @@ class MpvPlayerAdapter(
         }
     }
 
+    /**
+     * An empty playlist that gains an item points at it, as ExoPlayer's own does. clearMediaItems()
+     * leaves the index at -1 and nothing else moves it, so prepare() below loaded nothing and Add to
+     * queue with nothing loaded (fresh start, or after closing the mini player) never played.
+     */
+    private fun pointAtFirstItemIfUnset() {
+        if (localCurrentMediaItemIndex < 0 && playlist.isNotEmpty()) localCurrentMediaItemIndex = 0
+    }
+
     override fun prepare() {
         if (playlist.isNotEmpty() && localCurrentMediaItemIndex >= 0) {
             coroutineScope.launch {
@@ -574,6 +595,7 @@ class MpvPlayerAdapter(
 
     override fun addMediaItem(mediaItem: GenericMediaItem) {
         playlist.add(mediaItem)
+        pointAtFirstItemIfUnset()
 
         if (internalShuffleModeEnabled) {
             insertAppendedIntoShuffleOrder()
@@ -601,6 +623,7 @@ class MpvPlayerAdapter(
             if (index <= localCurrentMediaItemIndex) {
                 localCurrentMediaItemIndex++
             }
+            pointAtFirstItemIfUnset()
 
             if (internalShuffleModeEnabled) {
                 if (currentIndexBeforeInsert >= 0 && index == currentIndexBeforeInsert + 1) {
@@ -1208,6 +1231,8 @@ class MpvPlayerAdapter(
         // And the output: a fresh handle opens the system default, so without this the next track
         // would quietly leave the device the user picked.
         preferredAudioDevice?.let { setAudioDevice(it) }
+        // A track that starts while no window is on screen starts without video, like the others.
+        if (!AppOnScreen.onScreen.value) setVideoSuspended(true)
     }
 
     /**
