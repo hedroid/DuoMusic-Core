@@ -30,13 +30,14 @@ internal class SourceRoutingHomeRepository(
     override fun getBrowsePage(
         browseId: String,
         params: String?,
-    ): Flow<Resource<BrowsePage>> = youtube.getBrowsePage(browseId, params)
+        songString: String,
+    ): Flow<Resource<BrowsePage>> = youtube.getBrowsePage(browseId, params, songString)
 
     override fun getHomeData(
         params: String?,
         viewString: String,
         songString: String,
-    ): Flow<Resource<Pair<String?, List<HomeItem>>>> =
+    ): Flow<Resource<Triple<String?, List<HomeItem>, String?>>> =
         flow {
             if (isNetease()) {
                 emit(netease.getHomeData(params, viewString, songString).first())

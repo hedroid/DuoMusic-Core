@@ -28,6 +28,7 @@ import com.maxrave.domain.manager.DataStoreManager.Values.SIMPMUSIC
 import com.maxrave.domain.manager.DataStoreManager.Values.TRUE
 import com.maxrave.logger.Logger
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map

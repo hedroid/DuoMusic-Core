@@ -240,6 +240,7 @@ class NeteaseRepositoryImpl(
     override fun getBrowsePage(
         browseId: String,
         params: String?,
+        songString: String,
     ): Flow<Resource<BrowsePage>> = flow { emit(Resource.Error<BrowsePage>("Browse pages are not available on NetEase")) }
 
     override val source: MusicSource = MusicSource.NETEASE
@@ -922,7 +923,7 @@ class NeteaseRepositoryImpl(
         params: String?,
         viewString: String,
         songString: String,
-    ): Flow<Resource<Pair<String?, List<HomeItem>>>> =
+    ): Flow<Resource<Triple<String?, List<HomeItem>, String?>>> =
         flow {
             val rows =
                 if (params.isNullOrEmpty()) {
@@ -931,7 +932,8 @@ class NeteaseRepositoryImpl(
                     // chip 选中态:多行 feed 对标 YT mood 态 —— 热门/最新/精品三行并行
                     categoryFeedRows(params)
                 }
-            emit(Resource.Success(null to rows)) // 一次性拉取,无 continuation
+            // 第三元=Home 背景图(backdrop),网易源无此概念恒 null
+            emit(Resource.Success(Triple(null, rows, null))) // 一次性拉取,无 continuation
         }
 
     /** 标签选中态的两行 feed:热门/精品,各 50 张并行拉取(order=new 服务端不支持返回空,

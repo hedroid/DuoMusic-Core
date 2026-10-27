@@ -17,6 +17,8 @@ import com.maxrave.kotlinytmusicscraper.models.MediaType
 import com.maxrave.kotlinytmusicscraper.models.MusicCarouselShelfRenderer
 import com.maxrave.kotlinytmusicscraper.models.MusicResponsiveListItemRenderer
 import com.maxrave.kotlinytmusicscraper.models.MusicShelfRenderer
+import com.maxrave.kotlinytmusicscraper.models.SectionListRenderer
+import com.maxrave.kotlinytmusicscraper.models.YTItem
 import com.maxrave.kotlinytmusicscraper.models.MusicTwoRowItemRenderer
 import com.maxrave.kotlinytmusicscraper.models.PlaylistItem
 import com.maxrave.kotlinytmusicscraper.models.ReturnYouTubeDislikeResponse
