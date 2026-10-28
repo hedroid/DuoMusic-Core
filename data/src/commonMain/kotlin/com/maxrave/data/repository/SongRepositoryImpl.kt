@@ -208,9 +208,11 @@ internal class SongRepositoryImpl(
                 for (videoId in rankBySmartDownloadScore(localDataSource.getSongPlaysSince(since), nowTime)) {
                     if (top.size >= count) break
                     val song = localDataSource.getSong(videoId) ?: continue
-                    // Only what YouTube confirms is a song: videos, podcasts, live streams and rows of
-                    // unknown type stay out.
-                    if (!MusicVideoType.isAudio(song.videoType) || song.isLive) continue
+                    // Only what is confirmed audio: videos, podcasts, live streams and rows of
+                    // unknown type stay out. YT rows carry videoType; fork 双源——网易行是纯数字
+                    // id 且无 videoType(全为音频,播客剧集带 neteaseProgramId 排除),一并纳入。
+                    val neteaseAudio = song.videoId.toLongOrNull() != null && song.neteaseProgramId == null
+                    if (!(neteaseAudio || MusicVideoType.isAudio(song.videoType)) || song.isLive) continue
                     // Downloaded or downloading without the mark: the user downloaded it themselves.
                     if (song.downloadState != DownloadState.STATE_NOT_DOWNLOADED && song.category != mark) continue
                     top += song
