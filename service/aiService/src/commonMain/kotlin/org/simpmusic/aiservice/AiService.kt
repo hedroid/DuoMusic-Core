@@ -272,14 +272,15 @@ enum class AIHost(
     /** Fallback model when the user has not set a custom model ID. */
     val defaultModelId: String,
 ) {
-    GEMINI("gemini-2.5-flash-lite"),
-    OPENAI("gpt-5.6-luna"),
-    // DeepSeek API 只认文档模型名 deepseek-chat/deepseek-reasoner(别名映射到当期
-    // 版本),自造的 "deepseek-v4-flash" 这类名字不保证被接受(2026-10-28 用户日志
-    // 盘点定案改回文档名)
-    DEEPSEEK("deepseek-chat"),
+    // 各家默认=当前最新线里最便宜的一档(2026-10-29 用户定案,对齐各家 /models 列表):
+    // DeepSeek API 实际 advertise deepseek-v4-pro/deepseek-flash(一键获取实证),
+    // flash 档最便宜(~$0.15/$0.60 每百万 tokens off-peak);GPT-6 Luna $0.10/$0.50
+    // 为 OpenAI 当下最低价;Gemini 最新代 lite 档;智谱 glm-4.7-flash 免费(并发 1)
+    GEMINI("gemini-3.5-flash-lite"),
+    OPENAI("gpt-6-luna"),
+    DEEPSEEK("deepseek-flash"),
     ZHIPU("glm-4.7-flash"),
-    CUSTOM_OPENAI("gpt-5.6-luna"),
+    CUSTOM_OPENAI("gpt-6-luna"),
     ;
 
     companion object {
