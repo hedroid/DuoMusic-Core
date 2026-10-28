@@ -970,8 +970,10 @@ suspend fun NeteaseClient.addToPlaylist(
     }
 
 /**
- * 创建自己的歌单(weapi /playlist/create)。隐私歌单(privacy=true)——由本地歌单同步上云
- * 创建的歌单是备份性质,不该默认公开到个人主页。返回新歌单 id。
+ * 创建自己的歌单(weapi /playlist/create)。隐私歌单——由本地歌单同步上云创建的歌单是
+ * 备份性质,不该默认公开到个人主页。privacy 取 "10" 且带 type="NORMAL"(2026-10-28 修:
+ * 旧值 "true" 与公开请求契约不符,建单恒 400 请求参数错误;SPlayer ncm-api-rs 与
+ * API Enhanced 双实现一致取证)。返回新歌单 id。
  */
 suspend fun NeteaseClient.createPlaylist(
     name: String,
@@ -983,7 +985,8 @@ suspend fun NeteaseClient.createPlaylist(
                 "/playlist/create",
                 mapOf(
                     "name" to name.trim(),
-                    "privacy" to "true",
+                    "privacy" to "10",
+                    "type" to "NORMAL",
                 ),
             )
         val code = (body["code"] as? JsonPrimitive)?.content
@@ -1017,12 +1020,18 @@ suspend fun NeteaseClient.removeFromPlaylist(
         (body["code"] as? JsonPrimitive)?.content == "200"
     }
 
-/** 删除自己的歌单(weapi /playlist/delete;不可逆,红心歌单服务端会拒绝) */
+/** 删除自己的歌单(weapi /playlist/remove;不可逆,红心歌单服务端会拒绝)。
+ *  2026-10-28 修:旧 /playlist/delete{id} 与公开契约不符(SPlayer ncm-api-rs 与
+ *  API Enhanced 均为 /playlist/remove,ids="[id]"),delete 端点服务端拒绝。 */
 suspend fun NeteaseClient.deletePlaylist(
     playlistId: Long,
 ): Result<Boolean> =
     runCatching {
-        val body = callWeApi("/playlist/delete", mapOf("id" to playlistId))
+        val body =
+            callWeApi(
+                "/playlist/remove",
+                mapOf("ids" to "[$playlistId]"),
+            )
         (body["code"] as? JsonPrimitive)?.content == "200"
     }
 
