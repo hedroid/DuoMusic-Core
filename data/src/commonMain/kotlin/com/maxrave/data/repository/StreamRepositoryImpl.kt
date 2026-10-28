@@ -129,7 +129,11 @@ internal class StreamRepositoryImpl(
                         )
                         Logger.w("UpdateFormat", "Updated format for $videoId")
                     }.onFailure { throwable ->
-                        Logger.e("UpdateFormat", "Error: ${throwable.message}")
+                        // best-effort 遥测刷新:失败仅沿用旧 tracking URL,不影响播放。
+                        // d 级=只进控制台,不进导出日志——手机网络环境下 player() 常态
+                        // 失败(无固定流/live/被拒 "No URL found"/超时),e 级曾把
+                        // error.log 刷满纯噪音(2026-10-28 用户日志盘点定案降噪)
+                        Logger.d("UpdateFormat", "Refresh failed: ${throwable.message}")
                     }
             }
         }
