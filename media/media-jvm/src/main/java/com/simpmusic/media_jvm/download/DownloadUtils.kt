@@ -81,7 +81,7 @@ internal class DownloadUtils(
             Logger.i(TAG, "$videoId is a live stream, not downloading")
             songRepository.updateDownloadState(videoId, DownloadState.STATE_NOT_DOWNLOADED)
             publishDownloadTask(videoId, null)
-            return
+            return false
         }
         if (song != null) {
             songRepository.updateDownloadState(
