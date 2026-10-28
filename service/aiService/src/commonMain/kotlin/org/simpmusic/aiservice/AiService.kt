@@ -274,7 +274,10 @@ enum class AIHost(
 ) {
     GEMINI("gemini-2.5-flash-lite"),
     OPENAI("gpt-5.6-luna"),
-    DEEPSEEK("deepseek-v4-flash"),
+    // DeepSeek API 只认文档模型名 deepseek-chat/deepseek-reasoner(别名映射到当期
+    // 版本),自造的 "deepseek-v4-flash" 这类名字不保证被接受(2026-10-28 用户日志
+    // 盘点定案改回文档名)
+    DEEPSEEK("deepseek-chat"),
     ZHIPU("glm-4.7-flash"),
     CUSTOM_OPENAI("gpt-5.6-luna"),
     ;
