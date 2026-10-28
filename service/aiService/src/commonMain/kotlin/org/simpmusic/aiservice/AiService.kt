@@ -1,8 +1,6 @@
 package org.simpmusic.aiservice
 
 import com.aallam.openai.api.chat.ChatCompletion
-import com.aallam.openai.api.chat.ChatResponseFormat
-import com.aallam.openai.api.chat.JsonSchema
 import com.aallam.openai.api.chat.chatCompletionRequest
 import com.aallam.openai.api.http.Timeout
 import com.aallam.openai.api.model.ModelId
@@ -18,12 +16,6 @@ import com.maxrave.domain.data.model.taste.TasteReading
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
 import kotlin.time.Duration.Companion.minutes
 
 class AiService(
@@ -180,7 +172,11 @@ class AiService(
         val request =
             chatCompletionRequest {
                 this.model = this@AiService.model
-                responseFormat = ChatResponseFormat.jsonSchema(aiResponseJsonSchema)
+                // 裸发,不带 responseFormat——与 describeTaste 同款(2026-10-28 定案):
+                // 自定义 OpenAI 兼容端点普遍不收 json_schema(DeepSeek 实测回
+                // "This response_format type is unavailable now",用户日志连续 6 天
+                // 每首歌词都撞),格式约束由 system prompt 承担,下方解析本就按
+                // fence/裸 JSON 两形容错,不需要 schema 兜底
                 messages {
                     system {
                         content =
@@ -264,28 +260,6 @@ class AiService(
          * "Socket timeout has expired" while the provider is still working on it.
          */
         private val REQUEST_TIMEOUT = Timeout(socket = 2.minutes)
-
-        private val translationJsonSchema: JsonObject =
-            buildJsonObject {
-                put("type", "object")
-                putJsonObject("properties") {
-                    putJsonObject("translations") {
-                        put("type", "object")
-                        putJsonObject("additionalProperties") {
-                            put("type", "string")
-                        }
-                    }
-                }
-                putJsonArray("required") {
-                    add("translations")
-                }
-            }
-        private val aiResponseJsonSchema =
-            JsonSchema(
-                name = "ai_translation_schema",
-                schema = translationJsonSchema,
-                strict = false,
-            )
     }
 }
 
