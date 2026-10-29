@@ -10,13 +10,17 @@ import kotlinx.datetime.Month
 
 object Config {
     /**
-     * Anything else is our APK renamed and re-signed by someone. The last one is the vivo build
-     * (vivoAndroidApp): vivo's Origin Island only follows packages on vivo's own list.
+     * Anything else is our APK renamed and re-signed by someone. The legacy com.maxrave.simpmusic
+     * names are the pre-rebrand identity (old installs), the com.github.hedroid.duomusic names are
+     * the current fork identity, and the last one is the vivo build (vivoAndroidApp): vivo's
+     * Origin Island only follows packages on vivo's own list.
      */
     val OFFICIAL_PACKAGE_NAMES =
         setOf(
             "com.maxrave.simpmusic",
             "com.maxrave.simpmusic.dev",
+            "com.github.hedroid.duomusic",
+            "com.github.hedroid.duomusic.dev",
             "com.spotify.music",
         )
 
@@ -638,8 +642,8 @@ object MEDIA_CUSTOM_COMMAND {
 
 object MEDIA_NOTIFICATION {
     const val NOTIFICATION_ID = 200
-    const val NOTIFICATION_CHANNEL_NAME = "SimpMusic Playback Notification"
-    const val NOTIFICATION_CHANNEL_ID = "SimpMusic Playback Notification ID"
+    const val NOTIFICATION_CHANNEL_NAME = "DuoMusic Playback Notification"
+    const val NOTIFICATION_CHANNEL_ID = "DuoMusic Playback Notification ID"
 }
 
 const val SETTINGS_FILENAME = "settings"

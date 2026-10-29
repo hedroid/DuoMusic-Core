@@ -94,6 +94,7 @@ import com.maxrave.domain.utils.toListName
 import com.maxrave.domain.utils.toSongEntity
 import com.maxrave.domain.utils.toTrack
 import com.maxrave.logger.Logger
+import com.maxrave.media3.notification.NowBarLyricsNotifier
 import com.my.kizzy.DiscordRPC
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -283,6 +284,10 @@ internal class MediaServiceHandlerImpl(
     // MediaId the current line override was applied to. An in-place swap can itself surface
     // as a transition event, so resets must key off the mediaId, not off transition events.
     private var lyricMediaId: String? = null
+
+    // Now Bar(三星胶囊)歌词通知的第二条通道:非 MediaStyle/不绑 session/不 startForeground,
+    // 约束与事故记录见 NowBarLyricsNotifier。
+    private val nowBarLyricsNotifier by lazy { NowBarLyricsNotifier(context) }
 
     override fun updateLyricLines(lines: List<Line>?) {
         lyricLines = lines
@@ -650,9 +655,19 @@ internal class MediaServiceHandlerImpl(
                         .map { (it as SimpleMediaState.Progress).progress }
                         .collect { position ->
                             if (dataStoreManager.notificationLyrics.first() == TRUE) {
-                                applyLyricLine(currentLyricLineAt(position))
-                            } else if (currentLyricLine != null) {
-                                applyLyricLine(null)
+                                val line = currentLyricLineAt(position)
+                                applyLyricLine(line)
+                                val metadata = player.currentMediaItem?.metadata
+                                nowBarLyricsNotifier.update(
+                                    line = line,
+                                    title = metadata?.title.orEmpty(),
+                                    artist = metadata?.artist.orEmpty(),
+                                    positionMs = position,
+                                    durationMs = player.duration,
+                                )
+                            } else {
+                                if (currentLyricLine != null) applyLyricLine(null)
+                                nowBarLyricsNotifier.cancel()
                             }
                         }
                 }
@@ -3550,6 +3565,7 @@ internal class MediaServiceHandlerImpl(
             nowPlayingState.value.songEntity?.let { updateDiscordRpc(it) }
         } else {
             stopProgressUpdate()
+            nowBarLyricsNotifier.cancel()
             mayBeSaveRecentSong()
             mayBeSavePlaybackState()
             if (discordRPC?.isRpcRunning() == true) {
