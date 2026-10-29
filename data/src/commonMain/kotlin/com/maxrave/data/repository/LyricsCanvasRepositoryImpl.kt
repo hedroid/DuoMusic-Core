@@ -669,17 +669,20 @@ internal class LyricsCanvasRepositoryImpl(
         targetLanguage: String,
     ): Flow<Resource<Lyrics>> =
         flow {
+            // translateLyrics throws on its failure paths (empty content / unparseable JSON) rather
+            // than returning Result.failure; a bare runCatching here swallowed those throws and the
+            // collector starved with zero logs. Surface every failure path: log it and emit Error.
             runCatching {
                 Logger.w("AI Translation", "targetLanguage: $targetLanguage")
                 aiClient
                     .translateLyrics(lyrics, targetLanguage)
-                    .onSuccess { translatedLyrics ->
-                        Logger.d("AI Translation", "translated ${translatedLyrics.lines?.size ?: 0} lines")
-                        emit(Resource.Success(translatedLyrics))
-                    }.onFailure { throwable ->
-                        Logger.e("AI Translation", "Error: ${throwable.message}")
-                        emit(Resource.Error<Lyrics>("Translation failed"))
-                    }
+                    .getOrThrow()
+            }.onSuccess { translatedLyrics ->
+                Logger.d("AI Translation", "translated ${translatedLyrics.lines?.size ?: 0} lines")
+                emit(Resource.Success(translatedLyrics))
+            }.onFailure { throwable ->
+                Logger.e("AI Translation", "Error: ${throwable.message}")
+                emit(Resource.Error<Lyrics>("Translation failed"))
             }
         }.flowOn(Dispatchers.IO)
 
