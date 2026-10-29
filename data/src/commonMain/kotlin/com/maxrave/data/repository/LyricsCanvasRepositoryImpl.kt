@@ -7,6 +7,7 @@ import com.maxrave.data.mapping.toCanvasResult
 import com.maxrave.data.mapping.toLyrics
 import com.maxrave.domain.data.entities.LyricsEntity
 import com.maxrave.domain.data.entities.TranslatedLyricsEntity
+import com.maxrave.language.ScriptLanguageDetector
 import com.maxrave.domain.data.model.browse.album.Track
 import com.maxrave.domain.data.model.browse.artist.ArtistEditorial
 import com.maxrave.domain.data.model.browse.artist.ArtistLogo
@@ -669,6 +670,15 @@ internal class LyricsCanvasRepositoryImpl(
         targetLanguage: String,
     ): Flow<Resource<Lyrics>> =
         flow {
+            // 同语言跳过门（2026-10-29）：链路此前无本地语言预判，同语言歌词也照发请求、
+            // 靠模型返回空结果收场——目标 zh 时中文歌每首白烧一次且每次重播重复烧。
+            // 只在检测器给出高置信度结论且与目标一致时拦，歧义脚本（拉丁等）照常放行。
+            val sample = lyrics.lines.orEmpty().take(40).joinToString("\n") { it.words }
+            val detected = ScriptLanguageDetector.detect(sample)
+            if (detected != null && detected == targetLanguage.substringBefore('-').lowercase()) {
+                Logger.w("AI Translation", "Skip: lyrics already $detected (target $targetLanguage)")
+                return@flow
+            }
             // translateLyrics throws on its failure paths (empty content / unparseable JSON) rather
             // than returning Result.failure; a bare runCatching here swallowed those throws and the
             // collector starved with zero logs. Surface every failure path: log it and emit Error.
