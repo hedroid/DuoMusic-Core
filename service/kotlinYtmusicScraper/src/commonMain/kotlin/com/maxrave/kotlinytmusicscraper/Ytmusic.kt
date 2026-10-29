@@ -753,7 +753,7 @@ class Ytmusic {
         }
 
     suspend fun checkForGithubReleaseUpdate() =
-        httpClient.get("https://api.github.com/repos/hedroid/SimpMusic/releases/latest") {
+        httpClient.get("https://api.github.com/repos/hedroid/DuoMusic/releases/latest") {
             contentType(ContentType.Application.Json)
         }
 
@@ -765,7 +765,7 @@ class Ytmusic {
      */
     suspend fun checkForGithubReleaseUpdateViaRedirect(): String? {
         val response =
-            httpClient.get("https://github.com/hedroid/SimpMusic/releases/latest") {
+            httpClient.get("https://github.com/hedroid/DuoMusic/releases/latest") {
                 accept(ContentType.Application.Json)
             }
         val target = response.call.request.url.toString()
