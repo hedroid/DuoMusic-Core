@@ -47,6 +47,9 @@ class AiService(
                         OpenAIConfig(
                             token = apiKey,
                             host = OpenAIHost(baseUrl = AIHost.DEEPSEEK_BASE_URL),
+                            // 2026-10-29 实测:漏传落在库默认 socket 30s——推理模型整首歌
+                            // 歌词思考超 30s 即 Socket timeout,Zhipu 线每次必炸
+                            timeout = REQUEST_TIMEOUT,
                         ),
                 )
             }
@@ -57,6 +60,7 @@ class AiService(
                         OpenAIConfig(
                             token = apiKey,
                             host = OpenAIHost(baseUrl = AIHost.ZHIPU_BASE_URL),
+                            timeout = REQUEST_TIMEOUT,
                         ),
                 )
             }
