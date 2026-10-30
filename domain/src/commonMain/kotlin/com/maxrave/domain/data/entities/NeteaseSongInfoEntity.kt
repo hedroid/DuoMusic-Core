@@ -36,6 +36,8 @@ data class NeteaseSongInfoEntity(
         val location: String? = null,
         /** 评论 id,楼中楼展开的父评论锚点 */
         val commentId: Long? = null,
+        /** 评论者用户 id,与当前登录用户比对判定"我发的"(删除入口) */
+        val userId: Long? = null,
         val timeMs: Long? = null,
         /** 服务端预格式化的展示日期(如 2014-10-17) */
         val timeStr: String? = null,

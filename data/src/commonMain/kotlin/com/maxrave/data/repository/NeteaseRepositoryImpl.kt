@@ -1761,6 +1761,7 @@ class NeteaseRepositoryImpl(
             likedCount = likedCount,
             location = location,
             commentId = commentId,
+            userId = userId,
             timeMs = timeMs,
             timeStr = timeStr,
             replyCount = replyCount,
@@ -1783,6 +1784,24 @@ class NeteaseRepositoryImpl(
             onSuccess = { (id, thread) -> client.commentLike(id, commentId, like, thread) },
             onFailure = { Result.failure(it) },
         )
+
+    /**
+     * 删除自己发表的评论(歌曲/MV/播客线程通吃)。服务端可能按账号/设备风控拒绝,
+     * 失败时 Result.failure 带服务端 msg,UI 乐观移除需回插。
+     */
+    suspend fun deleteSongComment(
+        songId: String,
+        commentId: Long,
+        threadId: String? = null,
+    ): Result<Unit> =
+        commentTarget(songId, threadId).fold(
+            onSuccess = { (id, thread) -> client.commentDelete(id, commentId, thread) },
+            onFailure = { Result.failure(it) },
+        )
+
+    /** 当前登录的网易云用户 id(评论"删除我发的"判定),未登录返回 null */
+    suspend fun currentNeteaseUserId(): Long? =
+        getNeteaseAccounts().first().firstOrNull { it.isUsed }?.userId
 
     suspend fun getDjProgramLikeInfo(programId: Long): Result<NeteaseDjLikeInfo> =
         client.djProgramLikeInfo(programId)
