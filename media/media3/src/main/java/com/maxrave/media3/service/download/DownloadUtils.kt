@@ -394,7 +394,7 @@ internal class DownloadUtils(
 
     /**
      * 视频文件下载(仅 YT):音视频两条任务,双双 COMPLETED 后 merge 成 mp4 落
-     * Music/SimpMusic[/主艺人/专辑](与音频同树)。音频条目与纯音频下载共用同一 cacheKey——已下载过音频则
+     * Music/DuoMusic[/主艺人/专辑](与音频同树)。音频条目与纯音频下载共用同一 cacheKey——已下载过音频则
      * 该条目直接 COMPLETED,只补视频条目,对账逻辑天然兼容。
      */
     override suspend fun downloadVideo(
@@ -500,18 +500,23 @@ internal class DownloadUtils(
     /**
      * 删除歌曲同名 .lrc 歌词 + 级联清理空目录(2026-10-02 用户定)。
      * 歌词与音频同名同目录(writeLrc 落的 nameWithoutExtension+".lrc");音频删除后,
-     * 所在目录若已空则向上逐层删除(专辑层→艺人层),到 Music/SimpMusic 根为止——
-     * 根是应用专属目录,保留不删。lrc 的 MediaStore Files 残行一并清(自己贡献的行免权限)。
+     * 所在目录若已空则向上逐层删除(专辑层→艺人层),到所属世代的应用专属根为止——
+     * 根保留不删。lrc 的 MediaStore Files 残行一并清(自己贡献的行免权限)。
+     * 世代根两代(2026-10-30 落点改 DuoMusic):现役 Music/DuoMusic + 存量
+     * Music/SimpMusic,按音频实际所在树取界,越界路径一律不动。
      */
     private fun deleteLrcAndEmptyDirs(audioPath: String) {
         runCatching {
             val audio = File(audioPath)
             val dir = audio.parentFile ?: return
-            val root =
-                File(
-                    android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC),
-                    "SimpMusic",
+            val musicRoot =
+                android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC)
+            val roots =
+                listOf(
+                    File(musicRoot, FileDownloadExporter.AUDIO_ROOT_REL.removePrefix("Music/")),
+                    File(musicRoot, "SimpMusic"),
                 )
+            val root = roots.firstOrNull { dir.absolutePath.startsWith(it.absolutePath + File.separator) }
             val lrc = File(dir, audio.nameWithoutExtension + ".lrc")
             if (lrc.exists()) {
                 // 先走 MediaStore 行删除(provider 连文件一起清,且自动同步自己的库);
@@ -533,7 +538,7 @@ internal class DownloadUtils(
             }
             // 从歌曲所在目录向上删空目录;根目录(及一切越界路径)不动
             var cur: File? = dir
-            while (cur != null &&
+            while (cur != null && root != null &&
                 cur.absolutePath.startsWith(root.absolutePath + File.separator) &&
                 cur != root
             ) {
@@ -573,20 +578,22 @@ internal class DownloadUtils(
                 }
             }
             // 孤儿视频兜底清扫(2026-10-03 用户反馈"清除全部下载后视频文件仍有残留"):
-            // 两代视频落点(Movies/SimpMusic 与 Music/SimpMusic 树)里已无歌曲行路径引用的
-            // mp4 一并删除——旧管线/路径列写入失败年代留下的文件按 Room 路径清不到。
-            // 清空语义下两棵 SimpMusic 树里的 mp4 恒为应用下载产物,可安全全扫
+            // 已无歌曲行路径引用的 mp4 一并删除——旧管线/路径列写入失败年代留下的
+            // 文件按 Room 路径清不到。清空语义下这些应用专属树里的 mp4 恒为应用下载
+            // 产物,可安全全扫;2026-10-30 起落点改 DuoMusic,两代树都要扫。
             runCatching {
                 listOf(
                     android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES),
                     android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC),
                 ).forEach { base ->
-                    File(base, "SimpMusic").walkTopDown()
-                        .filter { it.isFile && it.extension.equals("mp4", ignoreCase = true) }
-                        .forEach { f ->
-                            deleteMediaByPath(f.absolutePath)
-                            if (f.delete()) Logger.w(TAG, "orphan video swept: $f")
-                        }
+                    listOf("DuoMusic", "SimpMusic").forEach { gen ->
+                        File(base, gen).walkTopDown()
+                            .filter { it.isFile && it.extension.equals("mp4", ignoreCase = true) }
+                            .forEach { f ->
+                                deleteMediaByPath(f.absolutePath)
+                                if (f.delete()) Logger.w(TAG, "orphan video swept: $f")
+                            }
+                    }
                 }
             }.onFailure { Logger.w(TAG, "orphan video sweep failed: ${it.message}") }
             _downloads.value = emptyMap()

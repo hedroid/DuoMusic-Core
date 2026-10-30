@@ -37,12 +37,12 @@ private const val TAG = "FileDownloadExporter"
 /**
  * 文件式下载(第二代)的转存端:DownloadManager 把流下进 downloadCache(COMPLETED)后,
  * 这里把缓存读成完整文件、写 tag/封面/歌词,经 MediaStore 落进公共目录,回写 Room 路径,
- * 最后清缓存条目——用户拿到的是 Music/SimpMusic/… 下的真实 mp3/flac/mp4。
+ * 最后清缓存条目——用户拿到的是 Music/DuoMusic/… 下的真实 mp3/flac/mp4。
  *
  * 失败语义:任何一步失败都**保留缓存条目**返回 false,数据不丢;下次启动的
  * "COMPLETED 但 Room 无路径"对账会重试转存(见 DownloadUtils.init)。
  *
- * 音频落 Music/SimpMusic[/<主艺人>/<专辑>],视频同树(2026-10-03 用户定;MediaStore.Video 不放行 Music/,走 FUSE 直写,失败回落 Movies/SimpMusic)。
+ * 音频落 Music/DuoMusic[/<主艺人>/<专辑>],视频同树(2026-10-03 用户定;MediaStore.Video 不放行 Music/,走 FUSE 直写,失败回落 Movies/DuoMusic)。
  */
 @UnstableApi
 internal class FileDownloadExporter(
@@ -300,11 +300,11 @@ internal class FileDownloadExporter(
     // ============================================================ 公共件
 
     /**
-     * 视频落盘(2026-10-03 用户定:与音频同树 Music/SimpMusic[/主艺人/专辑],文件管理器
+     * 视频落盘(2026-10-03 用户定:与音频同树 Music/DuoMusic[/主艺人/专辑],文件管理器
      * 一处看全)。MediaStore.Video 只放行 DCIM/Movies 主目录("Primary directory Music
      * not allowed"),Music/ 下走 FUSE 直写:①.mp4 直接新建(部分 ROM 放行);②失败退
      * .mp3 媒体扩展名暂存+rename——应用是贡献者,对自家文件持有 FUSE 改名权(lrc 同款
-     * 已实测);③两级都失败回落 Movies/SimpMusic 树(MediaStore.Video,目录开关同样
+     * 已实测);③两级都失败回落 Movies/DuoMusic 树(MediaStore.Video,目录开关同样
      * 生效)。返回实际落盘文件;全失败=null。
      */
     private suspend fun storeVideoFile(
@@ -314,7 +314,7 @@ internal class FileDownloadExporter(
         val stem = sanitizeFileName(song.title, song.videoId)
         val relDir = computeAudioRelPath(song)
         fuseWriteVideo(merged, relDir, stem, song.videoId, song.downloadedVideoFilePath)?.let { return it }
-        // 回落:Movies/SimpMusic[/主艺人/专辑],结构对齐 Music 树
+        // 回落:Movies/DuoMusic[/主艺人/专辑],结构对齐 Music 树
         val moviesRelDir = "Movies/" + relDir.removePrefix("Music/")
         return insertMediaStore(
             merged, moviesRelDir, "$stem.mp4",
@@ -576,8 +576,9 @@ internal class FileDownloadExporter(
                 }
             }
 
-            // 2) vorbis comment payload(little-endian 长度前缀)
-            val vendor = "SimpMusic-Hedroid".toByteArray(Charsets.UTF_8)
+            // 2) vorbis comment payload(little-endian 长度前缀);vendor 是写进 FLAC 的
+            //    编码器署名(文件属性可见),只写不读,随品牌更名
+            val vendor = "DuoMusic-Hedroid".toByteArray(Charsets.UTF_8)
             val baos = java.io.ByteArrayOutputStream()
             fun leU32(v: Int) {
                 baos.write(v and 0xFF)
@@ -697,7 +698,7 @@ internal class FileDownloadExporter(
     private fun mainArtist(song: SongEntity): String? =
         song.artistName?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { sanitizeFileName(it, song.videoId) }
 
-    /** RELATIVE_PATH:目录开关开=Music/SimpMusic/主艺人/专辑(缺专辑/缺艺人回落上层) */
+    /** RELATIVE_PATH:目录开关开=Music/DuoMusic/主艺人/专辑(缺专辑/缺艺人回落上层) */
     private suspend fun computeAudioRelPath(song: SongEntity): String {
         if (dataStoreManager.downloadArtistAlbumFolder.first() != DataStoreManager.TRUE) return AUDIO_ROOT_REL
         val artist = mainArtist(song) ?: return AUDIO_ROOT_REL
@@ -740,7 +741,7 @@ internal class FileDownloadExporter(
             .take(100)
             .ifBlank { "download_$fallback" }
 
-    /** relPath(如 Music/SimpMusic/艺人) → 该卷根下的绝对路径目录 */
+    /** relPath(如 Music/DuoMusic/艺人) → 该卷根下的绝对路径目录 */
     private fun relPathToDir(relPath: String): File =
         File(
             when (relPath.substringBefore('/')) {
@@ -886,7 +887,10 @@ internal class FileDownloadExporter(
         }.onFailure { Logger.w(TAG, "artwork download failed: ${it.message}") }.getOrNull()
 
     companion object {
-        const val AUDIO_ROOT_REL = "Music/SimpMusic"
+        /** 下载树现行根(2026-10-30 起 DuoMusic;设置页文案同款)。存量行仍指向
+         *  Music/SimpMusic 旧树,resolver/删除按 Room 存储路径走,不受本常量影响;
+         *  旧树仅剩清理类逻辑要认(见 DownloadUtils 的孤儿清扫与空目录级联)。 */
+        const val AUDIO_ROOT_REL = "Music/DuoMusic"
         private const val C_LENGTH_UNSET = -1L
     }
 }
