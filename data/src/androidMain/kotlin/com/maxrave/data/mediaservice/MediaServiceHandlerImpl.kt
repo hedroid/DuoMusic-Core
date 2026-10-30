@@ -3,6 +3,7 @@ package com.maxrave.data.mediaservice
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ActivityManager.RunningAppProcessInfo
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.media.audiofx.AudioEffect
@@ -94,7 +95,6 @@ import com.maxrave.domain.utils.toListName
 import com.maxrave.domain.utils.toSongEntity
 import com.maxrave.domain.utils.toTrack
 import com.maxrave.logger.Logger
-import com.maxrave.media3.notification.NowBarLyricsNotifier
 import com.my.kizzy.DiscordRPC
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -275,19 +275,14 @@ internal class MediaServiceHandlerImpl(
     private val _castState = MutableStateFlow(GenericCastState.NOT_CASTING)
     override val castState: StateFlow<GenericCastState> = _castState.asStateFlow()
 
-    // Notification lyrics: the active line is written into the current media item's artist slot
-    // (the second line every media renderer reads) via an in-place metadata swap; the adapter's
-    // stored queue keeps the real artist, so a null line simply restores it.
+    // System media lyrics use only the existing MediaSession's title slot. The adapter's
+    // stored queue keeps the real title/artist, so disabling lyrics restores the song metadata.
     private var lyricLines: List<Line>? = null
     private var currentLyricLine: String? = null
 
     // MediaId the current line override was applied to. An in-place swap can itself surface
     // as a transition event, so resets must key off the mediaId, not off transition events.
     private var lyricMediaId: String? = null
-
-    // Now Bar(三星胶囊)歌词通知的第二条通道:非 MediaStyle/不绑 session/不 startForeground,
-    // 约束与事故记录见 NowBarLyricsNotifier。
-    private val nowBarLyricsNotifier by lazy { NowBarLyricsNotifier(context) }
 
     override fun updateLyricLines(lines: List<Line>?) {
         lyricLines = lines
@@ -469,6 +464,12 @@ internal class MediaServiceHandlerImpl(
 
     //
     init {
+        // Remove the experimental Live Update left by older builds. It produced a second
+        // capsule beside the native music capsule; lyrics now use the media session alone.
+        context.getSystemService(NotificationManager::class.java)?.apply {
+            cancel(2027)
+            deleteNotificationChannel("duomusic_nowbar_lyrics")
+        }
         player.addListener(this)
         progressJob = Job()
         bufferedJob = Job()
@@ -650,26 +651,16 @@ internal class MediaServiceHandlerImpl(
                 }
             val notificationLyricsJob =
                 launch {
-                    simpleMediaState
-                        .filter { it is SimpleMediaState.Progress }
-                        .map { (it as SimpleMediaState.Progress).progress }
-                        .collect { position ->
-                            if (dataStoreManager.notificationLyrics.first() == TRUE) {
-                                val line = currentLyricLineAt(position)
-                                applyLyricLine(line)
-                                val metadata = player.currentMediaItem?.metadata
-                                nowBarLyricsNotifier.update(
-                                    line = line,
-                                    title = metadata?.title.orEmpty(),
-                                    artist = metadata?.artist.orEmpty(),
-                                    positionMs = position,
-                                    durationMs = player.duration,
-                                )
-                            } else {
-                                if (currentLyricLine != null) applyLyricLine(null)
-                                nowBarLyricsNotifier.cancel()
-                            }
+                    // Observe the switch directly as well as playback progress: turning it
+                    // off must restore title/artist even while playback (and its ticker) is paused.
+                    combine(simpleMediaState, dataStoreManager.notificationLyrics) { state, enabled ->
+                        if (enabled == TRUE) {
+                            val position = (state as? SimpleMediaState.Progress)?.progress ?: player.currentPosition
+                            currentLyricLineAt(position)
+                        } else {
+                            null
                         }
+                    }.collect { line -> applyLyricLine(line) }
                 }
             val playbackJob =
                 launch {
@@ -3565,7 +3556,6 @@ internal class MediaServiceHandlerImpl(
             nowPlayingState.value.songEntity?.let { updateDiscordRpc(it) }
         } else {
             stopProgressUpdate()
-            nowBarLyricsNotifier.cancel()
             mayBeSaveRecentSong()
             mayBeSavePlaybackState()
             if (discordRPC?.isRpcRunning() == true) {
