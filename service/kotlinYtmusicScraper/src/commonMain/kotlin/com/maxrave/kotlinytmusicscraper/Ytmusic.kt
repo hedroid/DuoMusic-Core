@@ -1490,15 +1490,18 @@ class Ytmusic {
         private const val TIDAL_AUTH_URL = "https://auth.tidal.com/v1/oauth2/token"
         private const val TIDAL_SEARCH_URL = "https://tidal.com/v2/client-search/"
 
-        // Remote config (TIDAL credentials) hosted on GitHub raw, fetched on each app launch.
-        // Credentials are NOT hard-coded in source — they live only in this remote file,
-        // kept in a separate repo (simpmusic-files) so the main repo stays credential-free.
+        // Remote config (TIDAL credentials) hosted on GitHub raw. Credentials are NOT
+        // hard-coded in source — they live only in this remote file, kept in a separate
+        // repo so the main repo stays credential-free.
+        // fork 2026-10-31: pointed at our own fork of simpmusic-files (upstream's repo
+        // stays alive, but rotation/availability is now under our control).
         const val TIDAL_REMOTE_CONFIG_URL =
-            "https://raw.githubusercontent.com/maxrave-dev/simpmusic-files/refs/heads/main/remote-config.json"
+            "https://raw.githubusercontent.com/hedroid/simpmusic-files/refs/heads/main/remote-config.json"
 
         // Read by dev builds only, so a banner can be tried out without any real user seeing it.
+        // (The fork's config repos no longer carry a promos block; the field simply stays null.)
         const val REMOTE_CONFIG_DEV_URL =
-            "https://raw.githubusercontent.com/maxrave-dev/simpmusic-files/refs/heads/main/remote-config-dev.json"
+            "https://raw.githubusercontent.com/hedroid/simpmusic-files/refs/heads/main/remote-config-dev.json"
     }
 }
 

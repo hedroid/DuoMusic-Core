@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -188,10 +189,15 @@ internal class CommonRepositoryImpl(
                             if (secret.isNotBlank()) youTube.tidalClientSecret = secret
                         }
                 }
-            // Fetch job: pull the latest TIDAL credentials from GitHub raw on each launch
-            // (async, non-blocking). On success we persist into DataStore; the observe job
-            // above then propagates the new values into YouTube reactively.
-            val tidalRemoteConfigJob =
+            // Fetch job: pull TIDAL credentials from GitHub raw **only when the local cache is
+            // blank** (fork 2026-10-31 定案 B 案):首次成功后凭证长期落在 DataStore,之后启动
+            // 不再请求——否则无代理直连设备每次启动都要陪 raw.githubusercontent 超时一次
+            // 而一无所获。代价=上游轮换凭证不会自动跟进(凭证源已 fork 到自己仓库,轮换
+            // 自主可控);缓存残缺(只有 id 或只有 secret)时仍会补拉。
+            if (
+                dataStoreManager.tidalClientId.first().isBlank() ||
+                dataStoreManager.tidalClientSecret.first().isBlank()
+            ) {
                 launch {
                     youTube
                         .getTidalRemoteConfig(dev = isDevBuild)
@@ -208,11 +214,12 @@ internal class CommonRepositoryImpl(
                                 ?.let { dataStoreManager.setTidalClientSecret(it) }
                             // fork: the config's `promos` block (upstream's launch banners) is
                             // deliberately NOT persisted — the banner feature is removed in the
-                            // fork, so upstream promo content never lands in local storage.
+                            // fork, and our forked config repo no longer carries the block at all.
                         }.onFailure {
                             Logger.e("RemoteConfig", "TIDAL remote config fetch failed: ${it.message}")
                         }
                 }
+            }
             val aiClientProviderJob =
                 launch {
                     dataStoreManager.aiProvider.collectLatest { provider ->
