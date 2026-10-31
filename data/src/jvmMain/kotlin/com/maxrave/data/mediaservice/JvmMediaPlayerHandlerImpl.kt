@@ -1911,7 +1911,20 @@ class JvmMediaPlayerHandlerImpl(
                 .lastOrNull { !it.videoId.startsWith(NETEASE_MV_MEDIA_ID_PREFIX) } ?: return
         val radioId = songRadioPlaylistId(lastTrack.videoId)
         if (radioId == queueData.value.data.playlistId) {
-            Logger.w(TAG, "loadMore: Already in radio mode")
+            // 同种子:INITIALIZING=上一批在途,等落地即可;INITIALIZED 但队列没长=上一批
+            // 失败/丢失——重拉同种子。之前这里无条件早退,而转电台时 playlistId 已改成
+            // RDAMVM<种子>,首批一旦失败种子永不推进,后续触发全部命中本分支被静默丢弃,
+            // 队列永久卡死在"已在电台模式"(用户症状:拉到底不再续批,来回滑动也无效)。
+            if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) {
+                Logger.w(TAG, "loadMore: Already in radio mode (fetch in flight)")
+                return
+            }
+            // 网易电台的失败重试由 getNeteaseRadioBatch 保留 offset 兜底,这里不重复打
+            // 同种子防循环;YT 分支重试由 UI 触发节奏(边沿+2s 抑制窗)天然限频。
+            if (!radioId.startsWith(NETEASE_RADIO_PLAYLIST_ID_PREFIX)) {
+                Logger.w(TAG, "loadMore: same-seed batch missing, retry getRelated(${lastTrack.videoId})")
+                getRelated(lastTrack.videoId)
+            }
             return
         }
         // 转电台前快照原队列身份+曲目集:关无尽开关时裁回原队列用(对齐 YTM autoplay
@@ -2036,32 +2049,48 @@ class JvmMediaPlayerHandlerImpl(
     override fun getRelated(videoId: String) {
         if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) return
         coroutineScope.launch {
-            songRepository.getRelatedData(videoId).collect { response ->
-                when (response) {
-                    is Resource.Success -> {
-                        loadMoreCatalog(response.data?.first?.toCollection(arrayListOf()) ?: arrayListOf())
-                        _queueData.update {
-                            it.copy(
-                                data =
-                                    it.data.copy(
-                                        continuation = response.data?.second,
-                                    ),
-                            )
+            // 拉批全程置 INITIALIZING:loadMore 入口按它拦重入,UI 的 pending 补射与加载
+            // 指示也认它。之前整个网络窗口队列读作 INITIALIZED,窗口内的重复触发全在
+            // startEndlessRadio 的同种子早退里静默丢掉——队列看起来"卡住不再续批"
+            _queueData.update {
+                it.copy(queueState = QueueData.StateSource.STATE_INITIALIZING)
+            }
+            try {
+                songRepository.getRelatedData(videoId).collect { response ->
+                    when (response) {
+                        is Resource.Success -> {
+                            loadMoreCatalog(response.data?.first?.toCollection(arrayListOf()) ?: arrayListOf())
+                            _queueData.update {
+                                it.copy(
+                                    data =
+                                        it.data.copy(
+                                            continuation = response.data?.second,
+                                        ),
+                                )
+                            }
+                        }
+
+                        is Resource.Error -> {
+                            // W 级:kermit Logger.d 不进 logcat,失败曾经完全不可见
+                            Logger.w(TAG, "getRelated: ${response.message}")
+                            _queueData.update {
+                                it.copy(
+                                    queueState = QueueData.StateSource.STATE_INITIALIZED,
+                                    data =
+                                        it.data.copy(
+                                            continuation = null,
+                                        ),
+                                )
+                            }
+                            reorderShuffledQueue(player.getCurrentMediaTimeLine())
                         }
                     }
-
-                    is Resource.Error -> {
-                        Logger.d("Check Related", "getRelated: ${response.message}")
-                        _queueData.update {
-                            it.copy(
-                                queueState = QueueData.StateSource.STATE_INITIALIZED,
-                                data =
-                                    it.data.copy(
-                                        continuation = null,
-                                    ),
-                            )
-                        }
-                        reorderShuffledQueue(player.getCurrentMediaTimeLine())
+                }
+            } finally {
+                // 空流/异常收场兜底:别把队列永久留在 INITIALIZING(loadMore 会被入口锁死)
+                if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) {
+                    _queueData.update {
+                        it.copy(queueState = QueueData.StateSource.STATE_INITIALIZED)
                     }
                 }
             }
@@ -2199,14 +2228,20 @@ class JvmMediaPlayerHandlerImpl(
             // 原生电台按首批规模续页；普通队列开启无尽后仍只追加少量歌曲。
             val batchSize = if (endlessRestore == null) NETEASE_RADIO_BATCH_SIZE else NETEASE_RADIO_APPEND_BATCH
             // SERVICE_SCOPE 是 Dispatchers.Main,getSongRadio 是裸 suspend,必须自己切 IO
-            withContext(Dispatchers.IO) {
-                batch =
-                    repository
-                        .getSongRadio(songId, limit = batchSize, offset = offset)
-                        ?.songs
-                        ?.map { it.toTrack() }
-                        .orEmpty()
+            val session =
+                withContext(Dispatchers.IO) {
+                    repository.getSongRadio(songId, limit = batchSize, offset = offset)
+                }
+            if (session == null) {
+                // 拉取失败≠电台见底:保留 offset,复位后等下次触发按同一 offset 重试
+                // (之前落进 exhausted 分支把 continuation 清了,网络抖一下电台就永久停摆)
+                Logger.w(TAG, "getNeteaseRadioBatch: fetch failed at offset $offset, offset kept for retry")
+                _queueData.update {
+                    it.copy(queueState = QueueData.StateSource.STATE_INITIALIZED)
+                }
+                return@launch
             }
+            batch = session.songs?.map { it.toTrack() } ?: emptyList()
             val existingIds = _queueData.value.data.listTracks.map { track -> track.videoId }.toSet()
             val fresh = batch.filter { track -> track.videoId !in existingIds }
             if (fresh.isNotEmpty()) {
